@@ -1,11 +1,21 @@
 .DEFAULT_GOAL := help
 
+# Load .env file if present
+-include .env
+export
+
 .PHONY: build run test test-cover lint fmt clean help
 .PHONY: migrate-up migrate-down migrate-status migrate-create migrate-reset
 .PHONY: postgres-start postgres-stop postgres-logs
 
-# Database connection string (override with environment variable)
-DB_URL ?= postgres://postgres:postgres@localhost:25432/simple_idm?sslmode=disable
+# Database connection string (built from .env or defaults)
+DB_HOST ?= localhost
+DB_PORT ?= 25432
+DB_USER ?= postgres
+DB_PASSWORD ?= postgres
+DB_NAME ?= simple_idm
+DB_SSLMODE ?= disable
+DB_URL ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=$(DB_SSLMODE)
 
 # Build the standalone server
 build:
@@ -123,6 +133,9 @@ help:
 	@echo "    clean            - Remove build artifacts"
 	@echo "    help             - Show this help"
 	@echo ""
-	@echo "  Environment variables:"
-	@echo "    DB_URL           - Database connection string"
-	@echo "                       Default: postgres://postgres:postgres@localhost:25432/simple_idm?sslmode=disable"
+	@echo "  Configuration:"
+	@echo "    Copy .env.example to .env and edit as needed."
+	@echo "    Makefile loads .env automatically."
+	@echo ""
+	@echo "    DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE"
+	@echo "    Or override with: DB_URL=postgres://... make migrate-up"
