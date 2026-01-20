@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tendant/simple-idm-slim/internal/auth"
+	"github.com/tendant/simple-idm-slim/internal/httputil"
 )
 
 type contextKey string
@@ -19,23 +20,32 @@ const (
 )
 
 // Auth creates middleware that validates JWT access tokens.
+// Checks Authorization header first, then falls back to cookie for web clients.
 func Auth(sessionService *auth.SessionService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract token from Authorization header
+			var tokenString string
+
+			// Try Authorization header first (mobile clients and API calls)
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
-				return
+			if authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+					tokenString = parts[1]
+				}
 			}
 
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-				http.Error(w, `{"error":"invalid authorization header format"}`, http.StatusUnauthorized)
-				return
+			// Fall back to cookie (web clients)
+			if tokenString == "" {
+				if token, ok := httputil.GetAccessTokenFromCookie(r); ok {
+					tokenString = token
+				}
 			}
 
-			tokenString := parts[1]
+			if tokenString == "" {
+				http.Error(w, `{"error":"missing authorization"}`, http.StatusUnauthorized)
+				return
+			}
 
 			// Validate token
 			claims, err := sessionService.ValidateAccessToken(tokenString)

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRefreshRequest_Validation(t *testing.T) {
+func TestRefreshRequest_Validation_Mobile(t *testing.T) {
 	tests := []struct {
 		name           string
 		body           string
@@ -43,6 +43,7 @@ func TestRefreshRequest_Validation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Client-Type", "mobile") // Mobile client sends tokens in body
 			rec := httptest.NewRecorder()
 
 			defer func() {
@@ -66,7 +67,29 @@ func TestRefreshRequest_Validation(t *testing.T) {
 	}
 }
 
-func TestLogoutRequest_Validation(t *testing.T) {
+func TestRefreshRequest_WebClient_NoCookie(t *testing.T) {
+	handler := &Handler{
+		sessionService: nil,
+	}
+
+	// Web client without cookie should get 401
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", nil)
+	rec := httptest.NewRecorder()
+
+	handler.Refresh(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Status code = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	var response map[string]string
+	json.NewDecoder(rec.Body).Decode(&response)
+	if response["error"] != "refresh token not found" {
+		t.Errorf("Error = %q, want %q", response["error"], "refresh token not found")
+	}
+}
+
+func TestLogoutRequest_Validation_Mobile(t *testing.T) {
 	tests := []struct {
 		name           string
 		body           string
@@ -76,14 +99,14 @@ func TestLogoutRequest_Validation(t *testing.T) {
 		{
 			name:           "empty body",
 			body:           `{}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "refresh_token is required",
+			expectedStatus: http.StatusNoContent, // Logout succeeds even with empty token
+			expectedError:  "",
 		},
 		{
 			name:           "empty refresh_token",
 			body:           `{"refresh_token": ""}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "refresh_token is required",
+			expectedStatus: http.StatusNoContent,
+			expectedError:  "",
 		},
 		{
 			name:           "invalid json",
@@ -101,6 +124,7 @@ func TestLogoutRequest_Validation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Client-Type", "mobile") // Mobile client sends tokens in body
 			rec := httptest.NewRecorder()
 
 			defer func() {
@@ -115,12 +139,30 @@ func TestLogoutRequest_Validation(t *testing.T) {
 				t.Errorf("Status code = %d, want %d", rec.Code, tt.expectedStatus)
 			}
 
-			var response map[string]string
-			json.NewDecoder(rec.Body).Decode(&response)
-			if response["error"] != tt.expectedError {
-				t.Errorf("Error = %q, want %q", response["error"], tt.expectedError)
+			if tt.expectedError != "" {
+				var response map[string]string
+				json.NewDecoder(rec.Body).Decode(&response)
+				if response["error"] != tt.expectedError {
+					t.Errorf("Error = %q, want %q", response["error"], tt.expectedError)
+				}
 			}
 		})
+	}
+}
+
+func TestLogoutRequest_WebClient_NoCookie(t *testing.T) {
+	handler := &Handler{
+		sessionService: nil,
+	}
+
+	// Web client without cookie should still succeed (clears cookies)
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	rec := httptest.NewRecorder()
+
+	handler.Logout(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Status code = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 }
 

@@ -10,10 +10,14 @@ import (
 	"github.com/tendant/simple-idm-slim/internal/httputil"
 )
 
+// Alias for cleaner code
+type tokenPair = domain.TokenPair
+
 // Handler handles password authentication endpoints.
 type Handler struct {
 	passwordService *auth.PasswordService
 	sessionService  *auth.SessionService
+	cookieConfig    httputil.CookieConfig
 }
 
 // NewHandler creates a new password handler.
@@ -21,6 +25,7 @@ func NewHandler(passwordService *auth.PasswordService, sessionService *auth.Sess
 	return &Handler{
 		passwordService: passwordService,
 		sessionService:  sessionService,
+		cookieConfig:    httputil.DefaultCookieConfig(),
 	}
 }
 
@@ -37,16 +42,19 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// TokenResponse represents a token response.
+// TokenResponse represents a token response (for mobile clients).
 type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 }
 
 // Register handles user registration.
 // POST /v1/auth/password/register
+//
+// For web clients: Sets HttpOnly cookies, returns minimal response.
+// For mobile clients (X-Client-Type: mobile): Returns tokens in response body.
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -59,7 +67,6 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Basic password validation (in production, add more checks)
 	if len(req.Password) < 8 {
 		httputil.Error(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
@@ -75,7 +82,6 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue session for the new user
 	opts := auth.IssueSessionOpts{
 		IP:        r.RemoteAddr,
 		UserAgent: r.UserAgent(),
@@ -86,16 +92,14 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.JSON(w, http.StatusCreated, TokenResponse{
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
-		TokenType:    tokens.TokenType,
-		ExpiresIn:    tokens.ExpiresIn,
-	})
+	h.writeTokenResponse(w, r, tokens, http.StatusCreated)
 }
 
 // Login handles user login.
 // POST /v1/auth/password/login
+//
+// For web clients: Sets HttpOnly cookies, returns minimal response.
+// For mobile clients (X-Client-Type: mobile): Returns tokens in response body.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -118,7 +122,6 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue session
 	opts := auth.IssueSessionOpts{
 		IP:        r.RemoteAddr,
 		UserAgent: r.UserAgent(),
@@ -129,10 +132,34 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.JSON(w, http.StatusOK, TokenResponse{
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
-		TokenType:    tokens.TokenType,
-		ExpiresIn:    tokens.ExpiresIn,
+	h.writeTokenResponse(w, r, tokens, http.StatusOK)
+}
+
+// writeTokenResponse writes tokens as cookies (web) or JSON (mobile).
+func (h *Handler) writeTokenResponse(w http.ResponseWriter, r *http.Request, tokens *tokenPair, status int) {
+	if httputil.IsMobileClient(r) {
+		// Mobile: return tokens in response body
+		httputil.JSON(w, status, TokenResponse{
+			AccessToken:  tokens.AccessToken,
+			RefreshToken: tokens.RefreshToken,
+			TokenType:    tokens.TokenType,
+			ExpiresIn:    tokens.ExpiresIn,
+		})
+		return
+	}
+
+	// Web: set HttpOnly cookies
+	httputil.SetAuthCookies(
+		w,
+		tokens.AccessToken,
+		tokens.RefreshToken,
+		h.sessionService.AccessTokenTTL(),
+		h.sessionService.RefreshTokenTTL(),
+		h.cookieConfig,
+	)
+
+	httputil.JSON(w, status, TokenResponse{
+		TokenType: tokens.TokenType,
+		ExpiresIn: tokens.ExpiresIn,
 	})
 }

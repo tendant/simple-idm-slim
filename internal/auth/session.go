@@ -50,6 +50,16 @@ func NewSessionService(config SessionConfig, sessions *repository.SessionsReposi
 	}
 }
 
+// AccessTokenTTL returns the access token TTL.
+func (s *SessionService) AccessTokenTTL() time.Duration {
+	return s.config.AccessTokenTTL
+}
+
+// RefreshTokenTTL returns the refresh token TTL.
+func (s *SessionService) RefreshTokenTTL() time.Duration {
+	return s.config.RefreshTokenTTL
+}
+
 // IssueSessionOpts holds options for session issuance.
 // This is the extension point for future 2FA support.
 type IssueSessionOpts struct {
