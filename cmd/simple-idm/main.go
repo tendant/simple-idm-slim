@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/tendant/simple-idm-slim/internal/auth"
 	"github.com/tendant/simple-idm-slim/internal/config"
 	httpserver "github.com/tendant/simple-idm-slim/internal/http"
@@ -17,6 +18,9 @@ import (
 )
 
 func main() {
+	// Load .env file if present (ignore error if not found)
+	_ = godotenv.Load()
+
 	// Setup logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

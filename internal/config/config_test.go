@@ -32,8 +32,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.DBHost != "localhost" {
 		t.Errorf("DBHost = %q, want %q", cfg.DBHost, "localhost")
 	}
-	if cfg.DBPort != 5432 {
-		t.Errorf("DBPort = %d, want %d", cfg.DBPort, 5432)
+	if cfg.DBPort != 25432 {
+		t.Errorf("DBPort = %d, want %d", cfg.DBPort, 25432)
 	}
 	if cfg.DBSSLMode != "disable" {
 		t.Errorf("DBSSLMode = %q, want %q", cfg.DBSSLMode, "disable")

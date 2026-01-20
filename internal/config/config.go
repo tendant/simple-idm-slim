@@ -40,9 +40,9 @@ func Load() (*Config, error) {
 		ServerAddr: getEnv("SERVER_ADDR", "0.0.0.0"),
 		ServerPort: getEnvInt("SERVER_PORT", 8080),
 
-		// Database defaults
+		// Database defaults (matches podman setup: make postgres-start)
 		DBHost:     getEnv("DB_HOST", "localhost"),
-		DBPort:     getEnvInt("DB_PORT", 5432),
+		DBPort:     getEnvInt("DB_PORT", 25432),
 		DBUser:     getEnv("DB_USER", "postgres"),
 		DBPassword: getEnv("DB_PASSWORD", "postgres"),
 		DBName:     getEnv("DB_NAME", "simple_idm"),
