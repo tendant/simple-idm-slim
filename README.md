@@ -22,7 +22,11 @@ go get github.com/tendant/simple-idm-slim
 ### 1. Run the migration
 
 ```bash
-psql -d yourdb -f migrations/001_initial_schema.sql
+# Install goose
+make install-goose
+
+# Run migrations
+DB_URL=postgres://localhost/yourdb?sslmode=disable make migrate-up
 ```
 
 ### 2. Use in your app
@@ -234,6 +238,32 @@ Run as a standalone server:
 cp .env.example .env
 go run ./cmd/simple-idm
 ```
+
+## Database Migrations
+
+Migrations use [goose](https://github.com/pressly/goose):
+
+```bash
+# Install goose CLI
+make install-goose
+
+# Run all pending migrations
+make migrate-up
+
+# Rollback one migration
+make migrate-down
+
+# Show migration status
+make migrate-status
+
+# Create a new migration
+make migrate-create
+
+# Reset database (rollback all, then apply all)
+make migrate-reset
+```
+
+Set `DB_URL` environment variable or it defaults to `postgres://localhost/simple_idm?sslmode=disable`.
 
 ## License
 
