@@ -184,7 +184,7 @@ func (i *IDM) Router() chi.Router {
 	r.Use(chimiddleware.Logger)
 
 	// Password auth routes
-	passwordHandler := password.NewHandler(i.passwordService, i.sessionService)
+	passwordHandler := password.NewHandler(i.config.Logger, i.passwordService, i.sessionService, nil, nil, "")
 	r.Post("/register", passwordHandler.Register)
 	r.Post("/login", passwordHandler.Login)
 
@@ -243,7 +243,7 @@ func (i *IDM) AuthRouter() chi.Router {
 	r.Use(chimiddleware.Logger)
 
 	// Password auth routes
-	passwordHandler := password.NewHandler(i.passwordService, i.sessionService)
+	passwordHandler := password.NewHandler(i.config.Logger, i.passwordService, i.sessionService, nil, nil, "")
 	r.Post("/register", passwordHandler.Register)
 	r.Post("/login", passwordHandler.Login)
 

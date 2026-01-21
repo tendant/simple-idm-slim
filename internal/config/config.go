@@ -31,6 +31,21 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURI  string
+
+	// SMTP Email
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPFromName string
+
+	// Application
+	AppBaseURL string
+
+	// Verification
+	EmailVerificationTTL time.Duration
+	PasswordResetTTL     time.Duration
 }
 
 // Load loads configuration from environment variables.
@@ -58,6 +73,21 @@ func Load() (*Config, error) {
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURI:  getEnv("GOOGLE_REDIRECT_URI", ""),
+
+		// SMTP Email (optional)
+		SMTPHost:     getEnv("SMTP_HOST", ""),
+		SMTPPort:     getEnvInt("SMTP_PORT", 587),
+		SMTPUser:     getEnv("SMTP_USER", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getEnv("SMTP_FROM", ""),
+		SMTPFromName: getEnv("SMTP_FROM_NAME", "Simple IDM"),
+
+		// Application
+		AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:8080"),
+
+		// Verification
+		EmailVerificationTTL: getEnvDuration("EMAIL_VERIFICATION_TTL", 24*time.Hour),
+		PasswordResetTTL:     getEnvDuration("PASSWORD_RESET_TTL", 1*time.Hour),
 	}
 
 	// Validate required fields
@@ -71,6 +101,11 @@ func Load() (*Config, error) {
 // HasGoogleOAuth returns true if Google OAuth is configured.
 func (c *Config) HasGoogleOAuth() bool {
 	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
+}
+
+// HasSMTP returns true if SMTP is configured.
+func (c *Config) HasSMTP() bool {
+	return c.SMTPHost != "" && c.SMTPUser != "" && c.SMTPPassword != ""
 }
 
 func getEnv(key, defaultValue string) string {

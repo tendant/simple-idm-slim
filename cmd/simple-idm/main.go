@@ -14,6 +14,7 @@ import (
 	"github.com/tendant/simple-idm-slim/internal/auth"
 	"github.com/tendant/simple-idm-slim/internal/config"
 	httpserver "github.com/tendant/simple-idm-slim/internal/http"
+	"github.com/tendant/simple-idm-slim/internal/notification"
 	"github.com/tendant/simple-idm-slim/internal/repository"
 )
 
@@ -56,6 +57,7 @@ func main() {
 	credsRepo := repository.NewCredentialsRepository(db)
 	identitiesRepo := repository.NewIdentitiesRepository(db)
 	sessionsRepo := repository.NewSessionsRepository(db)
+	verificationTokensRepo := repository.NewVerificationTokensRepository(db)
 
 	// Initialize services
 	passwordService := auth.NewPasswordService(db, usersRepo, credsRepo)
@@ -65,6 +67,25 @@ func main() {
 		JWTSecret:       []byte(cfg.JWTSecret),
 		Issuer:          cfg.JWTIssuer,
 	}, sessionsRepo, usersRepo)
+
+	verificationService := auth.NewVerificationService(auth.VerificationConfig{
+		EmailVerificationTTL: cfg.EmailVerificationTTL,
+		PasswordResetTTL:     cfg.PasswordResetTTL,
+	}, db, verificationTokensRepo, usersRepo)
+
+	// Initialize email service if configured
+	var emailService *notification.EmailService
+	if cfg.HasSMTP() {
+		emailService = notification.NewEmailService(notification.EmailConfig{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			User:     cfg.SMTPUser,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+			FromName: cfg.SMTPFromName,
+		})
+		logger.Info("email service enabled")
+	}
 
 	// Initialize Google service if configured
 	var googleService *auth.GoogleService
@@ -84,11 +105,14 @@ func main() {
 
 	// Create router
 	router := httpserver.NewRouter(httpserver.RouterConfig{
-		Logger:          logger,
-		PasswordService: passwordService,
-		GoogleService:   googleService,
-		SessionService:  sessionService,
-		UsersRepo:       usersRepo,
+		Logger:              logger,
+		PasswordService:     passwordService,
+		GoogleService:       googleService,
+		SessionService:      sessionService,
+		VerificationService: verificationService,
+		EmailService:        emailService,
+		UsersRepo:           usersRepo,
+		AppBaseURL:          cfg.AppBaseURL,
 	})
 
 	// Create HTTP server

@@ -112,6 +112,11 @@ func (s *PasswordService) Authenticate(ctx context.Context, email, password stri
 	return user.ID, nil
 }
 
+// GetUserByEmail retrieves a user by email address.
+func (s *PasswordService) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	return s.users.GetByEmail(ctx, email)
+}
+
 // ChangePassword changes a user's password.
 func (s *PasswordService) ChangePassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
 	hash, err := HashPassword(newPassword)
