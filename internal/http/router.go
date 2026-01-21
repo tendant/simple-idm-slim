@@ -3,7 +3,10 @@ package http
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/httprate"
 	"github.com/tendant/simple-idm-slim/internal/auth"
 	"github.com/tendant/simple-idm-slim/internal/http/features/email"
 	"github.com/tendant/simple-idm-slim/internal/http/features/google"
@@ -33,14 +36,43 @@ type RouterConfig struct {
 
 // NewRouter creates a new HTTP router with all routes registered.
 func NewRouter(cfg RouterConfig) http.Handler {
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
+
+	// Apply global middleware
+	r.Use(middleware.Recover(cfg.Logger))
+	r.Use(middleware.Logging(cfg.Logger))
 
 	// Health check
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		httputil.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	// Register feature routes
+	// Create rate limiters for different endpoint types
+	authRateLimiter := httprate.Limit(
+		10,                // 10 requests
+		time.Minute,       // per minute
+		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
+			httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded. please try again later")
+		}),
+	)
+
+	resetRateLimiter := httprate.Limit(
+		3,                 // 3 requests
+		5*time.Minute,     // per 5 minutes
+		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
+			httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded. please try again later")
+		}),
+	)
+
+	verifyRateLimiter := httprate.Limit(
+		5,                 // 5 requests
+		5*time.Minute,     // per 5 minutes
+		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
+			httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded. please try again later")
+		}),
+	)
+
+	// Register password authentication routes
 	passwordHandler := password.NewHandler(
 		cfg.Logger,
 		cfg.PasswordService,
@@ -49,18 +81,40 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.EmailService,
 		cfg.AppBaseURL,
 	)
-	passwordHandler.RegisterRoutes(mux)
+	r.Group(func(r chi.Router) {
+		r.Use(authRateLimiter)
+		r.Post("/v1/auth/password/register", passwordHandler.Register)
+		r.Post("/v1/auth/password/login", passwordHandler.Login)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(resetRateLimiter)
+		r.Post("/v1/auth/password/reset-request", passwordHandler.RequestPasswordReset)
+		r.Post("/v1/auth/password/reset", passwordHandler.ResetPassword)
+	})
 
+	// Register Google OAuth routes (if configured)
 	if cfg.GoogleService != nil {
 		googleHandler := google.NewHandler(cfg.GoogleService, cfg.SessionService)
-		googleHandler.RegisterRoutes(mux)
+		r.Get("/v1/auth/google", googleHandler.Start)
+		r.Get("/v1/auth/google/callback", googleHandler.Callback)
 	}
 
+	// Register session routes
 	sessionHandler := session.NewHandler(cfg.SessionService)
-	sessionHandler.RegisterRoutes(mux, cfg.SessionService)
+	r.Post("/v1/auth/refresh", sessionHandler.Refresh)
+	r.Post("/v1/auth/logout", sessionHandler.Logout)
+	r.With(middleware.Auth(cfg.SessionService)).Post("/v1/auth/logout/all", sessionHandler.LogoutAll)
 
-	meHandler := me.NewHandler(cfg.UsersRepo)
-	meHandler.RegisterRoutes(mux, cfg.SessionService)
+	// Register user profile routes
+	meHandler := me.NewHandler(
+		cfg.Logger,
+		cfg.UsersRepo,
+		cfg.VerificationService,
+		cfg.EmailService,
+		cfg.AppBaseURL,
+	)
+	r.With(middleware.Auth(cfg.SessionService)).Get("/v1/me", meHandler.GetMe)
+	r.With(middleware.Auth(cfg.SessionService)).Patch("/v1/me", meHandler.UpdateMe)
 
 	// Email verification routes (if email service is configured)
 	if cfg.EmailService != nil {
@@ -72,8 +126,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			cfg.PasswordService,
 			cfg.AppBaseURL,
 		)
-		authMiddleware := middleware.Auth(cfg.SessionService)
-		emailHandler.RegisterRoutes(mux, authMiddleware)
+		r.Post("/v1/auth/verify-email", emailHandler.VerifyEmail)
+		r.With(middleware.Auth(cfg.SessionService)).Post("/v1/auth/resend-verification", emailHandler.ResendVerificationEmail)
+		r.With(verifyRateLimiter).Post("/v1/auth/request-verification", emailHandler.RequestVerificationEmail)
 	}
 
 	// Authentication pages (if UI is enabled)
@@ -82,14 +137,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		if err != nil {
 			cfg.Logger.Error("failed to load page templates", "error", err)
 		} else {
-			pagesHandler.RegisterRoutes(mux)
+			r.Get("/auth/register", pagesHandler.Register)
+			r.Get("/auth/login", pagesHandler.Login)
+			r.Get("/auth/verify-email", pagesHandler.VerifyEmail)
+			r.Get("/auth/reset-password", pagesHandler.ResetPassword)
+			r.Get("/auth/reset-password/confirm", pagesHandler.ResetPasswordConfirm)
+			r.Get("/auth/request-verification", pagesHandler.RequestVerification)
 		}
 	}
 
-	// Apply global middleware
-	var handler http.Handler = mux
-	handler = middleware.Logging(cfg.Logger)(handler)
-	handler = middleware.Recover(cfg.Logger)(handler)
-
-	return handler
+	return r
 }

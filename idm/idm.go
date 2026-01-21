@@ -200,7 +200,7 @@ func (i *IDM) Router() chi.Router {
 		r.Post("/logout/all", sessionHandler.LogoutAll)
 
 		// User profile routes
-		meHandler := me.NewHandler(i.usersRepo)
+		meHandler := me.NewHandler(slog.Default(), i.usersRepo, nil, nil, "")
 		r.Get("/me", meHandler.GetMe)
 		r.Patch("/me", meHandler.UpdateMe)
 	})
@@ -224,7 +224,7 @@ func (i *IDM) MeRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Auth(i.sessionService))
 
-	meHandler := me.NewHandler(i.usersRepo)
+	meHandler := me.NewHandler(slog.Default(), i.usersRepo, nil, nil, "")
 	r.Get("/", meHandler.GetMe)
 	r.Patch("/", meHandler.UpdateMe)
 
