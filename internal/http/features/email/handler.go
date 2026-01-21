@@ -125,7 +125,7 @@ func (h *Handler) ResendVerificationEmail(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	verifyURL := fmt.Sprintf("%s/v1/auth/verify-email?token=%s", h.appBaseURL, token)
+	verifyURL := fmt.Sprintf("%s/auth/verify-email?token=%s", h.appBaseURL, token)
 	if err := h.emailService.SendVerificationEmail(claims.Email, verifyURL); err != nil {
 		h.logger.Error("failed to send verification email", "error", err, "user_id", userID)
 		httputil.Error(w, http.StatusInternalServerError, "failed to send verification email")

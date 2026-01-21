@@ -1,0 +1,80 @@
+{{define "content"}}
+<h1>Create Account</h1>
+
+<div id="alert" style="display: none;"></div>
+
+<form id="registerForm">
+    <div class="form-group">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="John Doe">
+    </div>
+
+    <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required placeholder="you@example.com">
+    </div>
+
+    <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required placeholder="At least 8 characters" minlength="8">
+    </div>
+
+    <button type="submit">Create Account</button>
+    <div class="spinner"></div>
+</form>
+
+<div class="link">
+    Already have an account? <a href="/auth/login">Sign in</a>
+</div>
+
+<script>
+document.getElementById('registerForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const form = e.target;
+    const alert = document.getElementById('alert');
+    const container = form.closest('.container');
+
+    container.classList.add('loading');
+    alert.style.display = 'none';
+
+    const data = {
+        name: form.name.value.trim(),
+        email: form.email.value.trim(),
+        password: form.password.value
+    };
+
+    try {
+        const response = await fetch('/v1/auth/password/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            alert.className = 'alert alert-success';
+            alert.textContent = 'Account created! Check your email to verify your account.';
+            alert.style.display = 'block';
+            form.reset();
+
+            // Redirect to login after 3 seconds
+            setTimeout(() => {
+                window.location.href = '/auth/login';
+            }, 3000);
+        } else {
+            alert.className = 'alert alert-error';
+            alert.textContent = result.error || 'Registration failed. Please try again.';
+            alert.style.display = 'block';
+        }
+    } catch (error) {
+        alert.className = 'alert alert-error';
+        alert.textContent = 'Network error. Please check your connection.';
+        alert.style.display = 'block';
+    } finally {
+        container.classList.remove('loading');
+    }
+});
+</script>
+{{end}}

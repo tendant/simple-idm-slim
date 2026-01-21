@@ -1,0 +1,78 @@
+{{define "content"}}
+<h1>Sign In</h1>
+
+<div id="alert" style="display: none;"></div>
+
+<form id="loginForm">
+    <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required placeholder="you@example.com" autofocus>
+    </div>
+
+    <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required placeholder="Your password">
+    </div>
+
+    <button type="submit">Sign In</button>
+    <div class="spinner"></div>
+</form>
+
+<div class="link">
+    <a href="/auth/reset-password">Forgot password?</a>
+</div>
+
+<div class="link">
+    Don't have an account? <a href="/auth/register">Create one</a>
+</div>
+
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const form = e.target;
+    const alert = document.getElementById('alert');
+    const container = form.closest('.container');
+
+    container.classList.add('loading');
+    alert.style.display = 'none';
+
+    const data = {
+        email: form.email.value.trim(),
+        password: form.password.value
+    };
+
+    try {
+        const response = await fetch('/v1/auth/password/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            alert.className = 'alert alert-success';
+            alert.textContent = 'Login successful! Redirecting...';
+            alert.style.display = 'block';
+
+            // Redirect to home or dashboard
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 1000);
+        } else {
+            alert.className = 'alert alert-error';
+            alert.textContent = result.error || 'Login failed. Please check your credentials.';
+            alert.style.display = 'block';
+            container.classList.remove('loading');
+        }
+    } catch (error) {
+        alert.className = 'alert alert-error';
+        alert.textContent = 'Network error. Please check your connection.';
+        alert.style.display = 'block';
+        container.classList.remove('loading');
+    }
+});
+</script>
+{{end}}

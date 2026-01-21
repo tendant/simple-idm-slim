@@ -8,6 +8,7 @@ import (
 	"github.com/tendant/simple-idm-slim/internal/http/features/email"
 	"github.com/tendant/simple-idm-slim/internal/http/features/google"
 	"github.com/tendant/simple-idm-slim/internal/http/features/me"
+	"github.com/tendant/simple-idm-slim/internal/http/features/pages"
 	"github.com/tendant/simple-idm-slim/internal/http/features/password"
 	"github.com/tendant/simple-idm-slim/internal/http/features/session"
 	"github.com/tendant/simple-idm-slim/internal/http/middleware"
@@ -26,6 +27,8 @@ type RouterConfig struct {
 	EmailService        *notification.EmailService
 	UsersRepo           *repository.UsersRepository
 	AppBaseURL          string
+	ServeUI             bool
+	TemplatesDir        string
 }
 
 // NewRouter creates a new HTTP router with all routes registered.
@@ -70,6 +73,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		)
 		authMiddleware := middleware.Auth(cfg.SessionService)
 		emailHandler.RegisterRoutes(mux, authMiddleware)
+	}
+
+	// Authentication pages (if UI is enabled)
+	if cfg.ServeUI {
+		pagesHandler, err := pages.NewHandler(cfg.TemplatesDir)
+		if err != nil {
+			cfg.Logger.Error("failed to load page templates", "error", err)
+		} else {
+			pagesHandler.RegisterRoutes(mux)
+		}
 	}
 
 	// Apply global middleware

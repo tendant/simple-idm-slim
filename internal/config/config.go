@@ -42,6 +42,7 @@ type Config struct {
 
 	// Application
 	AppBaseURL string
+	ServeUI    bool
 
 	// Verification
 	EmailVerificationTTL time.Duration
@@ -84,6 +85,7 @@ func Load() (*Config, error) {
 
 		// Application
 		AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:8080"),
+		ServeUI:    getEnvBool("SERVE_UI", true),
 
 		// Verification
 		EmailVerificationTTL: getEnvDuration("EMAIL_VERIFICATION_TTL", 24*time.Hour),
@@ -128,6 +130,15 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if d, err := time.ParseDuration(value); err == nil {
 			return d
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if b, err := strconv.ParseBool(value); err == nil {
+			return b
 		}
 	}
 	return defaultValue

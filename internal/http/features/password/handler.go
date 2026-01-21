@@ -120,7 +120,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.logger.Error("failed to create verification token", "error", err, "user_id", user.ID)
 		} else {
-			verifyURL := fmt.Sprintf("%s/v1/auth/verify-email?token=%s", h.appBaseURL, token)
+			verifyURL := fmt.Sprintf("%s/auth/verify-email?token=%s", h.appBaseURL, token)
 			if err := h.emailService.SendVerificationEmail(user.Email, verifyURL); err != nil {
 				h.logger.Error("failed to send verification email", "error", err, "user_id", user.ID)
 			} else {
@@ -262,7 +262,7 @@ func (h *Handler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send password reset email
-	resetURL := fmt.Sprintf("%s/v1/auth/password/reset?token=%s", h.appBaseURL, token)
+	resetURL := fmt.Sprintf("%s/auth/reset-password/confirm?token=%s", h.appBaseURL, token)
 	if err := h.emailService.SendPasswordResetEmail(user.Email, resetURL); err != nil {
 		h.logger.Error("failed to send password reset email", "error", err, "user_id", user.ID)
 		httputil.Error(w, http.StatusInternalServerError, "failed to send reset email")

@@ -113,6 +113,8 @@ func main() {
 		EmailService:        emailService,
 		UsersRepo:           usersRepo,
 		AppBaseURL:          cfg.AppBaseURL,
+		ServeUI:             cfg.ServeUI,
+		TemplatesDir:        "web/templates",
 	})
 
 	// Create HTTP server

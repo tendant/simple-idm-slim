@@ -1,0 +1,67 @@
+{{define "content"}}
+<h1>Verify Email</h1>
+
+<div id="alert" class="alert alert-info">
+    Verifying your email address...
+</div>
+
+<div class="spinner" style="display: block;"></div>
+
+<div id="actions" style="display: none;">
+    <div class="link">
+        <a href="/auth/login">Continue to Sign In</a>
+    </div>
+</div>
+
+<script>
+(async function() {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const alert = document.getElementById('alert');
+    const spinner = document.querySelector('.spinner');
+    const actions = document.getElementById('actions');
+
+    if (!token) {
+        alert.className = 'alert alert-error';
+        alert.textContent = 'No verification token provided.';
+        spinner.style.display = 'none';
+        return;
+    }
+
+    try {
+        const response = await fetch('/v1/auth/verify-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+
+        const result = await response.json();
+
+        spinner.style.display = 'none';
+
+        if (response.ok) {
+            alert.className = 'alert alert-success';
+            alert.textContent = result.message || 'Email verified successfully! You can now sign in.';
+            actions.style.display = 'block';
+
+            // Auto-redirect after 3 seconds
+            setTimeout(() => {
+                window.location.href = '/auth/login';
+            }, 3000);
+        } else {
+            alert.className = 'alert alert-error';
+            alert.textContent = result.error || 'Verification failed. The token may be invalid or expired.';
+
+            if (result.error && result.error.includes('expired')) {
+                actions.innerHTML = '<div class="link"><a href="/auth/resend-verification">Resend verification email</a></div>';
+                actions.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        spinner.style.display = 'none';
+        alert.className = 'alert alert-error';
+        alert.textContent = 'Network error. Please try again.';
+    }
+})();
+</script>
+{{end}}
