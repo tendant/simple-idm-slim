@@ -150,6 +150,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			httputil.Error(w, http.StatusUnauthorized, "invalid email or password")
 			return
 		}
+		if errors.Is(err, domain.ErrAccountLocked) {
+			httputil.Error(w, http.StatusForbidden, "account temporarily locked due to too many failed login attempts. Please try again in 15 minutes.")
+			return
+		}
 		httputil.Error(w, http.StatusInternalServerError, "authentication failed")
 		return
 	}

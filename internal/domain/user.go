@@ -8,13 +8,23 @@ import (
 
 // User represents the account.
 type User struct {
-	ID            uuid.UUID
-	Email         string
-	EmailVerified bool
-	Name          *string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     *time.Time
+	ID                   uuid.UUID
+	Email                string
+	EmailVerified        bool
+	Name                 *string
+	FailedLoginAttempts  int
+	LockedUntil          *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	DeletedAt            *time.Time
+}
+
+// IsLocked returns true if the account is currently locked.
+func (u *User) IsLocked() bool {
+	if u.LockedUntil == nil {
+		return false
+	}
+	return time.Now().Before(*u.LockedUntil)
 }
 
 // UserPassword stores password credentials separately from user profile.

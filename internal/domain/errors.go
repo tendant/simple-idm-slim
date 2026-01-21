@@ -7,6 +7,7 @@ var (
 	ErrUserNotFound              = errors.New("user not found")
 	ErrUserAlreadyExists         = errors.New("user already exists")
 	ErrInvalidCredentials        = errors.New("invalid credentials")
+	ErrAccountLocked             = errors.New("account locked due to too many failed login attempts")
 	ErrSessionNotFound           = errors.New("session not found")
 	ErrSessionExpired            = errors.New("session expired")
 	ErrSessionRevoked            = errors.New("session revoked")

@@ -85,7 +85,13 @@ func (s *PasswordService) Register(ctx context.Context, email, password, name st
 }
 
 // Authenticate verifies email and password, returns user ID on success.
+// Implements account lockout after 5 failed attempts with 15-minute lockout duration.
 func (s *PasswordService) Authenticate(ctx context.Context, email, password string) (uuid.UUID, error) {
+	const (
+		maxFailedAttempts = 5
+		lockoutDuration   = 15 * time.Minute
+	)
+
 	// Find user by email
 	user, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
@@ -93,6 +99,11 @@ func (s *PasswordService) Authenticate(ctx context.Context, email, password stri
 			return uuid.Nil, domain.ErrInvalidCredentials
 		}
 		return uuid.Nil, err
+	}
+
+	// Check if account is currently locked
+	if user.IsLocked() {
+		return uuid.Nil, domain.ErrAccountLocked
 	}
 
 	// Get password credentials
@@ -106,7 +117,14 @@ func (s *PasswordService) Authenticate(ctx context.Context, email, password stri
 
 	// Verify password
 	if !VerifyPassword(password, cred.PasswordHash) {
+		// Increment failed login attempts
+		_ = s.users.IncrementFailedLoginAttempts(ctx, user.ID, lockoutDuration, maxFailedAttempts)
 		return uuid.Nil, domain.ErrInvalidCredentials
+	}
+
+	// Successful login - reset failed attempts
+	if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
+		_ = s.users.ResetFailedLoginAttempts(ctx, user.ID)
 	}
 
 	return user.ID, nil

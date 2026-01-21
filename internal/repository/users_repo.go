@@ -47,13 +47,15 @@ func (r *UsersRepository) CreateTx(ctx context.Context, tx *sql.Tx, user *domain
 // GetByID retrieves a user by ID.
 func (r *UsersRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	query := `
-		SELECT id, email, email_verified, name, created_at, updated_at, deleted_at
+		SELECT id, email, email_verified, name, failed_login_attempts, locked_until,
+		       created_at, updated_at, deleted_at
 		FROM users
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	user := &domain.User{}
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID, &user.Email, &user.EmailVerified, &user.Name,
+		&user.FailedLoginAttempts, &user.LockedUntil,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -68,13 +70,15 @@ func (r *UsersRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Us
 // GetByEmail retrieves a user by email.
 func (r *UsersRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	query := `
-		SELECT id, email, email_verified, name, created_at, updated_at, deleted_at
+		SELECT id, email, email_verified, name, failed_login_attempts, locked_until,
+		       created_at, updated_at, deleted_at
 		FROM users
 		WHERE email = $1 AND deleted_at IS NULL
 	`
 	user := &domain.User{}
 	err := r.db.QueryRowContext(ctx, query, email).Scan(
 		&user.ID, &user.Email, &user.EmailVerified, &user.Name,
+		&user.FailedLoginAttempts, &user.LockedUntil,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -90,11 +94,13 @@ func (r *UsersRepository) GetByEmail(ctx context.Context, email string) (*domain
 func (r *UsersRepository) Update(ctx context.Context, user *domain.User) error {
 	query := `
 		UPDATE users
-		SET email = $2, email_verified = $3, name = $4, updated_at = $5
+		SET email = $2, email_verified = $3, name = $4,
+		    failed_login_attempts = $5, locked_until = $6, updated_at = $7
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	result, err := r.db.ExecContext(ctx, query,
-		user.ID, user.Email, user.EmailVerified, user.Name, time.Now(),
+		user.ID, user.Email, user.EmailVerified, user.Name,
+		user.FailedLoginAttempts, user.LockedUntil, time.Now(),
 	)
 	if err != nil {
 		return err
@@ -107,6 +113,35 @@ func (r *UsersRepository) Update(ctx context.Context, user *domain.User) error {
 		return domain.ErrUserNotFound
 	}
 	return nil
+}
+
+// IncrementFailedLoginAttempts increments the failed login attempts counter.
+func (r *UsersRepository) IncrementFailedLoginAttempts(ctx context.Context, userID uuid.UUID, lockoutDuration time.Duration, maxAttempts int) error {
+	query := `
+		UPDATE users
+		SET failed_login_attempts = failed_login_attempts + 1,
+		    locked_until = CASE
+		        WHEN failed_login_attempts + 1 >= $2 THEN NOW() + $3::interval
+		        ELSE locked_until
+		    END,
+		    updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	_, err := r.db.ExecContext(ctx, query, userID, maxAttempts, lockoutDuration)
+	return err
+}
+
+// ResetFailedLoginAttempts resets the failed login attempts and clears lockout.
+func (r *UsersRepository) ResetFailedLoginAttempts(ctx context.Context, userID uuid.UUID) error {
+	query := `
+		UPDATE users
+		SET failed_login_attempts = 0,
+		    locked_until = NULL,
+		    updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	_, err := r.db.ExecContext(ctx, query, userID)
+	return err
 }
 
 // SoftDelete soft-deletes a user.
