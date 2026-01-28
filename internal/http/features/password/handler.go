@@ -1,14 +1,18 @@
 package password
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/tendant/simple-idm-slim/pkg/auth"
 	"github.com/tendant/simple-idm-slim/pkg/domain"
+	"github.com/tendant/simple-idm-slim/pkg/repository"
 	"github.com/tendant/simple-idm-slim/internal/httputil"
 	"github.com/tendant/simple-idm-slim/internal/notification"
 )
@@ -18,13 +22,17 @@ type tokenPair = domain.TokenPair
 
 // Handler handles password authentication endpoints.
 type Handler struct {
-	logger              *slog.Logger
-	passwordService     *auth.PasswordService
-	sessionService      *auth.SessionService
-	verificationService *auth.VerificationService
-	emailService        *notification.EmailService
-	cookieConfig        httputil.CookieConfig
-	appBaseURL          string
+	logger                   *slog.Logger
+	passwordService          *auth.PasswordService
+	sessionService           *auth.SessionService
+	verificationService      *auth.VerificationService
+	emailService             *notification.EmailService
+	tenantsRepo              *repository.TenantsRepository
+	membershipsRepo          *repository.MembershipsRepository
+	db                       *sql.DB
+	cookieConfig             httputil.CookieConfig
+	appBaseURL               string
+	requireEmailVerification bool
 }
 
 // NewHandler creates a new password handler.
@@ -34,16 +42,22 @@ func NewHandler(
 	sessionService *auth.SessionService,
 	verificationService *auth.VerificationService,
 	emailService *notification.EmailService,
+	tenantsRepo *repository.TenantsRepository,
+	membershipsRepo *repository.MembershipsRepository,
 	appBaseURL string,
+	requireEmailVerification bool,
 ) *Handler {
 	return &Handler{
-		logger:              logger,
-		passwordService:     passwordService,
-		sessionService:      sessionService,
-		verificationService: verificationService,
-		emailService:        emailService,
-		cookieConfig:        httputil.DefaultCookieConfig(),
-		appBaseURL:          appBaseURL,
+		logger:                   logger,
+		passwordService:          passwordService,
+		sessionService:           sessionService,
+		verificationService:      verificationService,
+		emailService:             emailService,
+		tenantsRepo:              tenantsRepo,
+		membershipsRepo:          membershipsRepo,
+		cookieConfig:             httputil.DefaultCookieConfig(),
+		appBaseURL:               appBaseURL,
+		requireEmailVerification: requireEmailVerification,
 	}
 }
 
@@ -57,9 +71,10 @@ type RegisterRequest struct {
 
 // LoginRequest represents a login request.
 type LoginRequest struct {
-	Identifier string `json:"identifier,omitempty"` // New: email or username
-	Email      string `json:"email,omitempty"`      // Legacy: backward compatibility
-	Password   string `json:"password"`
+	Identifier string     `json:"identifier,omitempty"` // New: email or username
+	Email      string     `json:"email,omitempty"`      // Legacy: backward compatibility
+	Password   string     `json:"password"`
+	TenantID   *uuid.UUID `json:"tenant_id,omitempty"` // Optional: tenant selection
 }
 
 // TokenResponse represents a token response (for mobile clients).
@@ -70,11 +85,32 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
+// TenantSelectionResponse represents a tenant selection required response.
+type TenantSelectionResponse struct {
+	Error   string         `json:"error"`
+	Message string         `json:"message"`
+	Tenants []TenantOption `json:"tenants"`
+}
+
+// TenantOption represents a tenant option for selection.
+type TenantOption struct {
+	TenantID     string `json:"tenant_id"`
+	TenantName   string `json:"tenant_name"`
+	TenantSlug   string `json:"tenant_slug"`
+	MembershipID string `json:"membership_id"`
+}
+
 // Register handles user registration.
 // POST /v1/auth/password/register
 //
 // For web clients: Sets HttpOnly cookies, returns minimal response.
 // For mobile clients (X-Client-Type: mobile): Returns tokens in response body.
+//
+// Registration now creates:
+// 1. User account
+// 2. Personal tenant (auto-generated slug from email)
+// 3. Active membership
+// 4. Session with tenant context
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -93,6 +129,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		username = req.Username
 	}
 
+	// Register user (creates user + password credential)
 	user, err := h.passwordService.Register(r.Context(), req.Email, req.Password, req.Name, username)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserAlreadyExists) {
@@ -107,16 +144,59 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			httputil.Error(w, http.StatusBadRequest, "invalid username format: must be 3-30 characters, alphanumeric/underscore/hyphen, start with alphanumeric")
 			return
 		}
+		h.logger.Error("registration failed", "error", err)
 		httputil.Error(w, http.StatusInternalServerError, "registration failed")
 		return
 	}
 
+	// Create personal tenant
+	tenantID := uuid.New()
+	membershipID := uuid.New()
+	tenantSlug := generateTenantSlug(req.Email)
+	tenantName := req.Name + "'s Workspace"
+	if req.Name == "" {
+		tenantName = "Personal Workspace"
+	}
+
+	now := time.Now()
+	tenant := &domain.Tenant{
+		ID:        tenantID,
+		Name:      tenantName,
+		Slug:      tenantSlug,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := h.tenantsRepo.Create(r.Context(), tenant); err != nil {
+		h.logger.Error("failed to create tenant", "error", err, "user_id", user.ID)
+		httputil.Error(w, http.StatusInternalServerError, "registration failed")
+		return
+	}
+
+	// Create active membership
+	membership := &domain.Membership{
+		ID:        membershipID,
+		TenantID:  tenantID,
+		UserID:    user.ID,
+		Status:    domain.MembershipStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := h.membershipsRepo.Create(r.Context(), membership); err != nil {
+		h.logger.Error("failed to create membership", "error", err, "user_id", user.ID, "tenant_id", tenantID)
+		httputil.Error(w, http.StatusInternalServerError, "registration failed")
+		return
+	}
+
+	// Issue session with tenant context
 	opts := auth.IssueSessionOpts{
 		IP:        r.RemoteAddr,
 		UserAgent: r.UserAgent(),
 	}
-	tokens, err := h.sessionService.IssueSession(r.Context(), user.ID, opts)
+	tokens, err := h.sessionService.IssueSession(r.Context(), user.ID, tenantID, membershipID, opts)
 	if err != nil {
+		h.logger.Error("failed to issue session", "error", err, "user_id", user.ID)
 		httputil.Error(w, http.StatusInternalServerError, "failed to issue session")
 		return
 	}
@@ -140,14 +220,24 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.logger.Info("user registered", "user_id", user.ID, "tenant_id", tenantID)
 	h.writeTokenResponse(w, r, tokens, http.StatusCreated)
 }
 
 // Login handles user login.
 // POST /v1/auth/password/login
 //
-// For web clients: Sets HttpOnly cookies, returns minimal response.
-// For mobile clients (X-Client-Type: mobile): Returns tokens in response body.
+// Login flow:
+// 1. Authenticate user (email/username + password)
+// 2. Fetch active memberships for user
+// 3. If no memberships -> error (user not in any tenant)
+// 4. If tenant_id provided:
+//    - Verify user has active membership in that tenant
+//    - Use that tenant for session
+// 5. If tenant_id NOT provided:
+//    - If exactly 1 membership -> auto-select that tenant
+//    - If multiple memberships -> return tenant selection required error
+// 6. Issue session with tenant_id + membership_id
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -166,6 +256,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Authenticate user
 	userID, err := h.passwordService.Authenticate(r.Context(), identifier, req.Password)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
@@ -176,6 +267,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			httputil.Error(w, http.StatusForbidden, "account temporarily locked due to too many failed login attempts. Please try again in 15 minutes.")
 			return
 		}
+		h.logger.Error("authentication failed", "error", err)
 		httputil.Error(w, http.StatusInternalServerError, "authentication failed")
 		return
 	}
@@ -183,25 +275,86 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// Check if email is verified
 	user, err := h.passwordService.GetUserByID(r.Context(), userID)
 	if err != nil {
+		h.logger.Error("failed to get user", "error", err, "user_id", userID)
 		httputil.Error(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
 
-	if !user.EmailVerified {
+	// Check email verification if enforced
+	if h.requireEmailVerification && !user.EmailVerified {
 		httputil.Error(w, http.StatusForbidden, "email verification required. Please check your email for verification link")
 		return
 	}
 
+	// Fetch active memberships
+	memberships, err := h.membershipsRepo.GetActiveMembershipsWithTenants(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("failed to get memberships", "error", err, "user_id", userID)
+		httputil.Error(w, http.StatusInternalServerError, "failed to get memberships")
+		return
+	}
+
+	if len(memberships) == 0 {
+		httputil.Error(w, http.StatusForbidden, "no tenant access")
+		return
+	}
+
+	var selectedMembership *repository.MembershipWithTenant
+
+	// Handle tenant selection
+	if req.TenantID != nil {
+		// Validate tenant_id
+		for _, m := range memberships {
+			if m.Membership.TenantID == *req.TenantID && m.Membership.IsActive() {
+				selectedMembership = m
+				break
+			}
+		}
+		if selectedMembership == nil {
+			httputil.Error(w, http.StatusForbidden, "invalid tenant access")
+			return
+		}
+	} else {
+		// Auto-select if only one
+		if len(memberships) == 1 {
+			selectedMembership = memberships[0]
+		} else {
+			// Multiple tenants - return tenant selection required
+			var tenantOptions []TenantOption
+			for _, m := range memberships {
+				tenantOptions = append(tenantOptions, TenantOption{
+					TenantID:     m.Tenant.ID.String(),
+					TenantName:   m.Tenant.Name,
+					TenantSlug:   m.Tenant.Slug,
+					MembershipID: m.Membership.ID.String(),
+				})
+			}
+
+			httputil.JSON(w, http.StatusConflict, TenantSelectionResponse{
+				Error:   "tenant_selection_required",
+				Message: "User has access to multiple tenants",
+				Tenants: tenantOptions,
+			})
+			return
+		}
+	}
+
+	// Issue session with tenant context
 	opts := auth.IssueSessionOpts{
 		IP:        r.RemoteAddr,
 		UserAgent: r.UserAgent(),
 	}
-	tokens, err := h.sessionService.IssueSession(r.Context(), userID, opts)
+	tokens, err := h.sessionService.IssueSession(r.Context(), userID,
+		selectedMembership.Membership.TenantID,
+		selectedMembership.Membership.ID,
+		opts)
 	if err != nil {
+		h.logger.Error("failed to issue session", "error", err, "user_id", userID)
 		httputil.Error(w, http.StatusInternalServerError, "failed to issue session")
 		return
 	}
 
+	h.logger.Info("user logged in", "user_id", userID, "tenant_id", selectedMembership.Membership.TenantID)
 	h.writeTokenResponse(w, r, tokens, http.StatusOK)
 }
 

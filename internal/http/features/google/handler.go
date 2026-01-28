@@ -1,30 +1,52 @@
 package google
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tendant/simple-idm-slim/pkg/auth"
+	"github.com/tendant/simple-idm-slim/pkg/domain"
+	"github.com/tendant/simple-idm-slim/pkg/repository"
 	"github.com/tendant/simple-idm-slim/internal/httputil"
 )
 
 // Handler handles Google OAuth endpoints.
 type Handler struct {
-	googleService  *auth.GoogleService
-	sessionService *auth.SessionService
-	stateStore     *StateStore
+	googleService   *auth.GoogleService
+	sessionService  *auth.SessionService
+	tenantsRepo     *repository.TenantsRepository
+	membershipsRepo *repository.MembershipsRepository
+	usersRepo       *repository.UsersRepository
+	logger          *slog.Logger
+	stateStore      *StateStore
 }
 
 // NewHandler creates a new Google handler.
-func NewHandler(googleService *auth.GoogleService, sessionService *auth.SessionService) *Handler {
+func NewHandler(
+	googleService *auth.GoogleService,
+	sessionService *auth.SessionService,
+	tenantsRepo *repository.TenantsRepository,
+	membershipsRepo *repository.MembershipsRepository,
+	usersRepo *repository.UsersRepository,
+	logger *slog.Logger,
+) *Handler {
 	return &Handler{
-		googleService:  googleService,
-		sessionService: sessionService,
-		stateStore:     NewStateStore(),
+		googleService:   googleService,
+		sessionService:  sessionService,
+		tenantsRepo:     tenantsRepo,
+		membershipsRepo: membershipsRepo,
+		usersRepo:       usersRepo,
+		logger:          logger,
+		stateStore:      NewStateStore(),
 	}
 }
 
@@ -83,6 +105,86 @@ func generateRandomString(length int) string {
 	b := make([]byte, length)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+// generateTenantSlug creates a unique slug from an email address.
+func generateTenantSlug(email string) string {
+	parts := strings.Split(email, "@")
+	username := parts[0]
+	reg := regexp.MustCompile(`[^a-z0-9]+`)
+	slug := reg.ReplaceAllString(strings.ToLower(username), "")
+	if slug == "" {
+		slug = "user"
+	}
+	if len(slug) > 20 {
+		slug = slug[:20]
+	}
+	random := strings.Replace(uuid.New().String(), "-", "", -1)[:8]
+	return slug + "-" + random
+}
+
+// ensureTenantMembership ensures the user has at least one active tenant membership.
+// If not, creates a personal tenant and membership. Returns the membership to use.
+func (h *Handler) ensureTenantMembership(ctx context.Context, userID uuid.UUID) (*repository.MembershipWithTenant, error) {
+
+	// Fetch active memberships
+	memberships, err := h.membershipsRepo.GetActiveMembershipsWithTenants(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// If user has memberships, return the first one (auto-select)
+	if len(memberships) > 0 {
+		return memberships[0], nil
+	}
+
+	// No memberships - create personal tenant and membership
+	user, err := h.usersRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID := uuid.New()
+	membershipID := uuid.New()
+	tenantSlug := generateTenantSlug(user.Email)
+	tenantName := "Personal Workspace"
+	if user.Name != nil && *user.Name != "" {
+		tenantName = *user.Name + "'s Workspace"
+	}
+
+	now := time.Now()
+	tenant := &domain.Tenant{
+		ID:        tenantID,
+		Name:      tenantName,
+		Slug:      tenantSlug,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := h.tenantsRepo.Create(ctx, tenant); err != nil {
+		return nil, err
+	}
+
+	// Create active membership
+	membership := &domain.Membership{
+		ID:        membershipID,
+		TenantID:  tenantID,
+		UserID:    userID,
+		Status:    domain.MembershipStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := h.membershipsRepo.Create(ctx, membership); err != nil {
+		return nil, err
+	}
+
+	h.logger.Info("created tenant for OAuth user", "user_id", userID, "tenant_id", tenantID)
+
+	return &repository.MembershipWithTenant{
+		Membership: *membership,
+		Tenant:     *tenant,
+	}, nil
 }
 
 // Start initiates the Google OAuth flow.
@@ -167,19 +269,26 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue session
+	// Ensure user has tenant membership (auto-create if new user)
+	membership, err := h.ensureTenantMembership(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("failed to ensure tenant membership", "error", err, "user_id", userID)
+		httputil.Error(w, http.StatusInternalServerError, "failed to setup tenant")
+		return
+	}
+
+	// Issue session with tenant context
 	opts := auth.IssueSessionOpts{
 		IP:        r.RemoteAddr,
 		UserAgent: r.UserAgent(),
 	}
-	tokens, err := h.sessionService.IssueSession(r.Context(), userID, opts)
+	tokens, err := h.sessionService.IssueSession(r.Context(), userID, membership.Membership.TenantID, membership.Membership.ID, opts)
 	if err != nil {
 		httputil.Error(w, http.StatusInternalServerError, "failed to issue session")
 		return
 	}
 
 	// Return tokens as JSON (or redirect with tokens in fragment/query for SPA)
-	// For SPA, you might want to redirect to oauthState.RedirectURI with tokens
 	httputil.JSON(w, http.StatusOK, CallbackResponse{
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
@@ -241,12 +350,22 @@ func (h *Handler) CallbackHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue session
+	// Ensure user has tenant membership
+	membership, err := h.ensureTenantMembership(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("failed to ensure tenant membership", "error", err, "user_id", userID)
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`<html><body><script>window.opener.postMessage({error:"tenant_setup_failed"},"*");window.close();</script></body></html>`))
+		return
+	}
+
+	// Issue session with tenant context
 	opts := auth.IssueSessionOpts{
 		IP:        r.RemoteAddr,
 		UserAgent: r.UserAgent(),
 	}
-	tokens, err := h.sessionService.IssueSession(r.Context(), userID, opts)
+	tokens, err := h.sessionService.IssueSession(r.Context(), userID, membership.Membership.TenantID, membership.Membership.ID, opts)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusInternalServerError)

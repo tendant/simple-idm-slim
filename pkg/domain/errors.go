@@ -19,6 +19,10 @@ var (
 	ErrVerificationTokenExpired  = errors.New("verification token expired")
 	ErrVerificationTokenConsumed = errors.New("verification token already used")
 	ErrVerificationTokenInvalid  = errors.New("invalid verification token")
+	ErrTenantNotFound            = errors.New("tenant not found")
+	ErrMembershipNotFound        = errors.New("membership not found")
+	ErrMembershipNotActive       = errors.New("membership is not active")
+	ErrNoTenantAccess            = errors.New("user has no access to this tenant")
 )
 
 // Validation errors

@@ -22,16 +22,19 @@ import (
 
 // RouterConfig holds configuration for the router.
 type RouterConfig struct {
-	Logger              *slog.Logger
-	PasswordService     *auth.PasswordService
-	GoogleService       *auth.GoogleService
-	SessionService      *auth.SessionService
-	VerificationService *auth.VerificationService
-	EmailService        *notification.EmailService
-	UsersRepo           *repository.UsersRepository
-	AppBaseURL          string
-	ServeUI             bool
-	TemplatesDir        string
+	Logger                   *slog.Logger
+	PasswordService          *auth.PasswordService
+	GoogleService            *auth.GoogleService
+	SessionService           *auth.SessionService
+	VerificationService      *auth.VerificationService
+	EmailService             *notification.EmailService
+	UsersRepo                *repository.UsersRepository
+	TenantsRepo              *repository.TenantsRepository
+	MembershipsRepo          *repository.MembershipsRepository
+	AppBaseURL               string
+	ServeUI                  bool
+	TemplatesDir             string
+	RequireEmailVerification bool
 }
 
 // NewRouter creates a new HTTP router with all routes registered.
@@ -79,7 +82,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.SessionService,
 		cfg.VerificationService,
 		cfg.EmailService,
+		cfg.TenantsRepo,
+		cfg.MembershipsRepo,
 		cfg.AppBaseURL,
+		cfg.RequireEmailVerification,
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authRateLimiter)
@@ -94,7 +100,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Register Google OAuth routes (if configured)
 	if cfg.GoogleService != nil {
-		googleHandler := google.NewHandler(cfg.GoogleService, cfg.SessionService)
+		googleHandler := google.NewHandler(
+			cfg.GoogleService,
+			cfg.SessionService,
+			cfg.TenantsRepo,
+			cfg.MembershipsRepo,
+			cfg.UsersRepo,
+			cfg.Logger,
+		)
 		r.Get("/v1/auth/google", googleHandler.Start)
 		r.Get("/v1/auth/google/callback", googleHandler.Callback)
 	}

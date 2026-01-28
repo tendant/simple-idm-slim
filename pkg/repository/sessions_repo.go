@@ -24,11 +24,11 @@ func NewSessionsRepository(db *sql.DB) *SessionsRepository {
 // Create creates a new session.
 func (r *SessionsRepository) Create(ctx context.Context, session *domain.Session) error {
 	query := `
-		INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO sessions (id, user_id, tenant_id, token_hash, created_at, expires_at, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 	_, err := r.db.ExecContext(ctx, query,
-		session.ID, session.UserID, session.TokenHash,
+		session.ID, session.UserID, session.TenantID, session.TokenHash,
 		session.CreatedAt, session.ExpiresAt, session.Metadata,
 	)
 	return err
@@ -37,13 +37,13 @@ func (r *SessionsRepository) Create(ctx context.Context, session *domain.Session
 // GetByID retrieves a session by ID.
 func (r *SessionsRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Session, error) {
 	query := `
-		SELECT id, user_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
+		SELECT id, user_id, tenant_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
 		FROM sessions
 		WHERE id = $1
 	`
 	session := &domain.Session{}
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&session.ID, &session.UserID, &session.TokenHash,
+		&session.ID, &session.UserID, &session.TenantID, &session.TokenHash,
 		&session.CreatedAt, &session.ExpiresAt, &session.RevokedAt,
 		&session.LastSeenAt, &session.Metadata,
 	)
@@ -59,13 +59,13 @@ func (r *SessionsRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 // GetByTokenHash retrieves a session by token hash.
 func (r *SessionsRepository) GetByTokenHash(ctx context.Context, tokenHash string) (*domain.Session, error) {
 	query := `
-		SELECT id, user_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
+		SELECT id, user_id, tenant_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
 		FROM sessions
 		WHERE token_hash = $1 AND revoked_at IS NULL
 	`
 	session := &domain.Session{}
 	err := r.db.QueryRowContext(ctx, query, tokenHash).Scan(
-		&session.ID, &session.UserID, &session.TokenHash,
+		&session.ID, &session.UserID, &session.TenantID, &session.TokenHash,
 		&session.CreatedAt, &session.ExpiresAt, &session.RevokedAt,
 		&session.LastSeenAt, &session.Metadata,
 	)
@@ -81,7 +81,7 @@ func (r *SessionsRepository) GetByTokenHash(ctx context.Context, tokenHash strin
 // GetByUserID retrieves all active sessions for a user.
 func (r *SessionsRepository) GetByUserID(ctx context.Context, userID uuid.UUID) ([]*domain.Session, error) {
 	query := `
-		SELECT id, user_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
+		SELECT id, user_id, tenant_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
 		FROM sessions
 		WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
 		ORDER BY created_at DESC
@@ -96,7 +96,7 @@ func (r *SessionsRepository) GetByUserID(ctx context.Context, userID uuid.UUID) 
 	for rows.Next() {
 		session := &domain.Session{}
 		err := rows.Scan(
-			&session.ID, &session.UserID, &session.TokenHash,
+			&session.ID, &session.UserID, &session.TenantID, &session.TokenHash,
 			&session.CreatedAt, &session.ExpiresAt, &session.RevokedAt,
 			&session.LastSeenAt, &session.Metadata,
 		)
@@ -185,4 +185,45 @@ func (r *SessionsRepository) DeleteExpired(ctx context.Context, olderThan time.D
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// GetByUserIDAndTenant retrieves all active sessions for a user in a specific tenant.
+func (r *SessionsRepository) GetByUserIDAndTenant(ctx context.Context, userID, tenantID uuid.UUID) ([]*domain.Session, error) {
+	query := `
+		SELECT id, user_id, tenant_id, token_hash, created_at, expires_at, revoked_at, last_seen_at, metadata
+		FROM sessions
+		WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL AND expires_at > NOW()
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query, userID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*domain.Session
+	for rows.Next() {
+		session := &domain.Session{}
+		err := rows.Scan(
+			&session.ID, &session.UserID, &session.TenantID, &session.TokenHash,
+			&session.CreatedAt, &session.ExpiresAt, &session.RevokedAt,
+			&session.LastSeenAt, &session.Metadata,
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+// RevokeAllByUserIDAndTenant revokes all sessions for a user in a specific tenant.
+func (r *SessionsRepository) RevokeAllByUserIDAndTenant(ctx context.Context, userID, tenantID uuid.UUID) error {
+	query := `
+		UPDATE sessions
+		SET revoked_at = NOW()
+		WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL
+	`
+	_, err := r.db.ExecContext(ctx, query, userID, tenantID)
+	return err
 }

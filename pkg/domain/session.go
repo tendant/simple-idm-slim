@@ -11,6 +11,7 @@ import (
 type Session struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
+	TenantID   uuid.UUID // Tenant context for the session
 	TokenHash  string
 	CreatedAt  time.Time
 	ExpiresAt  time.Time

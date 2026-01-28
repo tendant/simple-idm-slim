@@ -58,6 +58,8 @@ func main() {
 	identitiesRepo := repository.NewIdentitiesRepository(db)
 	sessionsRepo := repository.NewSessionsRepository(db)
 	verificationTokensRepo := repository.NewVerificationTokensRepository(db)
+	tenantsRepo := repository.NewTenantsRepository(db)
+	membershipsRepo := repository.NewMembershipsRepository(db)
 
 	// Initialize services
 	passwordService := auth.NewPasswordService(db, usersRepo, credsRepo)
@@ -66,7 +68,7 @@ func main() {
 		RefreshTokenTTL: cfg.RefreshTokenTTL,
 		JWTSecret:       []byte(cfg.JWTSecret),
 		Issuer:          cfg.JWTIssuer,
-	}, sessionsRepo, usersRepo)
+	}, sessionsRepo, usersRepo, membershipsRepo)
 
 	verificationService := auth.NewVerificationService(auth.VerificationConfig{
 		EmailVerificationTTL: cfg.EmailVerificationTTL,
@@ -105,16 +107,19 @@ func main() {
 
 	// Create router
 	router := httpserver.NewRouter(httpserver.RouterConfig{
-		Logger:              logger,
-		PasswordService:     passwordService,
-		GoogleService:       googleService,
-		SessionService:      sessionService,
-		VerificationService: verificationService,
-		EmailService:        emailService,
-		UsersRepo:           usersRepo,
-		AppBaseURL:          cfg.AppBaseURL,
-		ServeUI:             cfg.ServeUI,
-		TemplatesDir:        "web/templates",
+		Logger:                   logger,
+		PasswordService:          passwordService,
+		GoogleService:            googleService,
+		SessionService:           sessionService,
+		VerificationService:      verificationService,
+		EmailService:             emailService,
+		UsersRepo:                usersRepo,
+		TenantsRepo:              tenantsRepo,
+		MembershipsRepo:          membershipsRepo,
+		AppBaseURL:               cfg.AppBaseURL,
+		ServeUI:                  cfg.ServeUI,
+		TemplatesDir:             "web/templates",
+		RequireEmailVerification: cfg.RequireEmailVerification,
 	})
 
 	// Create HTTP server

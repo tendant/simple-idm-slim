@@ -97,6 +97,8 @@ type IDM struct {
 	credsRepo       *repository.CredentialsRepository
 	identitiesRepo  *repository.IdentitiesRepository
 	sessionsRepo    *repository.SessionsRepository
+	tenantsRepo     *repository.TenantsRepository
+	membershipsRepo *repository.MembershipsRepository
 	passwordService *auth.PasswordService
 	sessionService  *auth.SessionService
 	googleService   *auth.GoogleService
@@ -122,6 +124,8 @@ func New(cfg Config) (*IDM, error) {
 	credsRepo := repository.NewCredentialsRepository(cfg.DB)
 	identitiesRepo := repository.NewIdentitiesRepository(cfg.DB)
 	sessionsRepo := repository.NewSessionsRepository(cfg.DB)
+	tenantsRepo := repository.NewTenantsRepository(cfg.DB)
+	membershipsRepo := repository.NewMembershipsRepository(cfg.DB)
 
 	// Initialize services
 	passwordService := auth.NewPasswordService(cfg.DB, usersRepo, credsRepo)
@@ -130,7 +134,7 @@ func New(cfg Config) (*IDM, error) {
 		RefreshTokenTTL: cfg.RefreshTokenTTL,
 		JWTSecret:       []byte(cfg.JWTSecret),
 		Issuer:          cfg.JWTIssuer,
-	}, sessionsRepo, usersRepo)
+	}, sessionsRepo, usersRepo, membershipsRepo)
 
 	var googleService *auth.GoogleService
 	if cfg.Google != nil {
@@ -153,6 +157,8 @@ func New(cfg Config) (*IDM, error) {
 		credsRepo:       credsRepo,
 		identitiesRepo:  identitiesRepo,
 		sessionsRepo:    sessionsRepo,
+		tenantsRepo:     tenantsRepo,
+		membershipsRepo: membershipsRepo,
 		passwordService: passwordService,
 		sessionService:  sessionService,
 		googleService:   googleService,
@@ -184,7 +190,17 @@ func (i *IDM) Router() chi.Router {
 	r.Use(chimiddleware.Logger)
 
 	// Password auth routes
-	passwordHandler := password.NewHandler(i.config.Logger, i.passwordService, i.sessionService, nil, nil, "")
+	passwordHandler := password.NewHandler(
+		i.config.Logger,
+		i.passwordService,
+		i.sessionService,
+		nil,   // verification service
+		nil,   // email service
+		i.tenantsRepo,
+		i.membershipsRepo,
+		"",    // app base URL
+		false, // requireEmailVerification (disabled without email service)
+	)
 	r.Post("/register", passwordHandler.Register)
 	r.Post("/login", passwordHandler.Login)
 
@@ -207,7 +223,14 @@ func (i *IDM) Router() chi.Router {
 
 	// Google OAuth routes (if configured)
 	if i.googleService != nil {
-		googleHandler := google.NewHandler(i.googleService, i.sessionService)
+		googleHandler := google.NewHandler(
+			i.googleService,
+			i.sessionService,
+			i.tenantsRepo,
+			i.membershipsRepo,
+			i.usersRepo,
+			i.config.Logger,
+		)
 		r.Get("/google/start", googleHandler.Start)
 		r.Get("/google/callback", googleHandler.Callback)
 	}
@@ -244,7 +267,17 @@ func (i *IDM) AuthRouter() chi.Router {
 	r.Use(chimiddleware.Logger)
 
 	// Password auth routes
-	passwordHandler := password.NewHandler(i.config.Logger, i.passwordService, i.sessionService, nil, nil, "")
+	passwordHandler := password.NewHandler(
+		i.config.Logger,
+		i.passwordService,
+		i.sessionService,
+		nil,   // verification service
+		nil,   // email service
+		i.tenantsRepo,
+		i.membershipsRepo,
+		"",    // app base URL
+		false, // requireEmailVerification (disabled without email service)
+	)
 	r.Post("/register", passwordHandler.Register)
 	r.Post("/login", passwordHandler.Login)
 
@@ -261,7 +294,14 @@ func (i *IDM) AuthRouter() chi.Router {
 
 	// Google OAuth routes (if configured)
 	if i.googleService != nil {
-		googleHandler := google.NewHandler(i.googleService, i.sessionService)
+		googleHandler := google.NewHandler(
+			i.googleService,
+			i.sessionService,
+			i.tenantsRepo,
+			i.membershipsRepo,
+			i.usersRepo,
+			i.config.Logger,
+		)
 		r.Get("/google/start", googleHandler.Start)
 		r.Get("/google/callback", googleHandler.Callback)
 	}

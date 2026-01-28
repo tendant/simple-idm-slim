@@ -17,6 +17,10 @@ const (
 	UserIDKey contextKey = "user_id"
 	// ClaimsKey is the context key for the token claims.
 	ClaimsKey contextKey = "claims"
+	// TenantIDKey is the context key for the tenant ID.
+	TenantIDKey contextKey = "tenant_id"
+	// MembershipIDKey is the context key for the membership ID.
+	MembershipIDKey contextKey = "membership_id"
 )
 
 // Auth creates middleware that validates JWT access tokens.
@@ -61,8 +65,24 @@ func Auth(sessionService *auth.SessionService) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Add user ID and claims to context
+			// Parse tenant ID
+			tenantID, err := uuid.Parse(claims.TenantID)
+			if err != nil {
+				http.Error(w, `{"error":"invalid tenant_id in token"}`, http.StatusUnauthorized)
+				return
+			}
+
+			// Parse membership ID
+			membershipID, err := uuid.Parse(claims.MembershipID)
+			if err != nil {
+				http.Error(w, `{"error":"invalid membership_id in token"}`, http.StatusUnauthorized)
+				return
+			}
+
+			// Add user ID, tenant ID, membership ID, and claims to context
 			ctx := context.WithValue(r.Context(), UserIDKey, userID)
+			ctx = context.WithValue(ctx, TenantIDKey, tenantID)
+			ctx = context.WithValue(ctx, MembershipIDKey, membershipID)
 			ctx = context.WithValue(ctx, ClaimsKey, claims)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -80,4 +100,16 @@ func GetUserID(ctx context.Context) (uuid.UUID, bool) {
 func GetClaims(ctx context.Context) (*auth.AccessTokenClaims, bool) {
 	claims, ok := ctx.Value(ClaimsKey).(*auth.AccessTokenClaims)
 	return claims, ok
+}
+
+// GetTenantID extracts the tenant ID from the request context.
+func GetTenantID(ctx context.Context) (uuid.UUID, bool) {
+	tenantID, ok := ctx.Value(TenantIDKey).(uuid.UUID)
+	return tenantID, ok
+}
+
+// GetMembershipID extracts the membership ID from the request context.
+func GetMembershipID(ctx context.Context) (uuid.UUID, bool) {
+	membershipID, ok := ctx.Value(MembershipIDKey).(uuid.UUID)
+	return membershipID, ok
 }
