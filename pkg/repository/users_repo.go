@@ -48,14 +48,14 @@ func (r *UsersRepository) CreateTx(ctx context.Context, tx *sql.Tx, user *domain
 func (r *UsersRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	query := `
 		SELECT id, email, username, email_verified, name, failed_login_attempts, locked_until,
-		       created_at, updated_at, deleted_at
+		       mfa_enabled, created_at, updated_at, deleted_at
 		FROM users
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	user := &domain.User{}
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID, &user.Email, &user.Username, &user.EmailVerified, &user.Name,
-		&user.FailedLoginAttempts, &user.LockedUntil,
+		&user.FailedLoginAttempts, &user.LockedUntil, &user.MFAEnabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -71,14 +71,14 @@ func (r *UsersRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Us
 func (r *UsersRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	query := `
 		SELECT id, email, username, email_verified, name, failed_login_attempts, locked_until,
-		       created_at, updated_at, deleted_at
+		       mfa_enabled, created_at, updated_at, deleted_at
 		FROM users
 		WHERE email = $1 AND deleted_at IS NULL
 	`
 	user := &domain.User{}
 	err := r.db.QueryRowContext(ctx, query, email).Scan(
 		&user.ID, &user.Email, &user.Username, &user.EmailVerified, &user.Name,
-		&user.FailedLoginAttempts, &user.LockedUntil,
+		&user.FailedLoginAttempts, &user.LockedUntil, &user.MFAEnabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -188,14 +188,14 @@ func (r *UsersRepository) Delete(ctx context.Context, id uuid.UUID) error {
 func (r *UsersRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	query := `
 		SELECT id, email, username, email_verified, name, failed_login_attempts, locked_until,
-		       created_at, updated_at, deleted_at
+		       mfa_enabled, created_at, updated_at, deleted_at
 		FROM users
 		WHERE username = $1 AND deleted_at IS NULL
 	`
 	user := &domain.User{}
 	err := r.db.QueryRowContext(ctx, query, username).Scan(
 		&user.ID, &user.Email, &user.Username, &user.EmailVerified, &user.Name,
-		&user.FailedLoginAttempts, &user.LockedUntil,
+		&user.FailedLoginAttempts, &user.LockedUntil, &user.MFAEnabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -212,14 +212,14 @@ func (r *UsersRepository) GetByUsername(ctx context.Context, username string) (*
 func (r *UsersRepository) GetByEmailOrUsername(ctx context.Context, identifier string) (*domain.User, error) {
 	query := `
 		SELECT id, email, username, email_verified, name, failed_login_attempts, locked_until,
-		       created_at, updated_at, deleted_at
+		       mfa_enabled, created_at, updated_at, deleted_at
 		FROM users
 		WHERE (email = $1 OR username = $1) AND deleted_at IS NULL
 	`
 	user := &domain.User{}
 	err := r.db.QueryRowContext(ctx, query, identifier).Scan(
 		&user.ID, &user.Email, &user.Username, &user.EmailVerified, &user.Name,
-		&user.FailedLoginAttempts, &user.LockedUntil,
+		&user.FailedLoginAttempts, &user.LockedUntil, &user.MFAEnabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -245,4 +245,25 @@ func (r *UsersRepository) ExistsByUsername(ctx context.Context, username string)
 	var exists bool
 	err := r.db.QueryRowContext(ctx, query, username).Scan(&exists)
 	return exists, err
+}
+
+// UpdateMFAEnabled updates the MFA enabled status for a user.
+func (r *UsersRepository) UpdateMFAEnabled(ctx context.Context, userID uuid.UUID, enabled bool) error {
+	query := `
+		UPDATE users
+		SET mfa_enabled = $2, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	result, err := r.db.ExecContext(ctx, query, userID, enabled)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return domain.ErrUserNotFound
+	}
+	return nil
 }

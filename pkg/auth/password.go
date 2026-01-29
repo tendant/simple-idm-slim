@@ -23,22 +23,44 @@ const (
 
 // PasswordService handles password authentication.
 type PasswordService struct {
-	db        *sql.DB
-	users     *repository.UsersRepository
-	creds     *repository.CredentialsRepository
+	db                   *sql.DB
+	users                *repository.UsersRepository
+	creds                *repository.CredentialsRepository
+	policy               *PasswordPolicy
+	strictEmailValidation bool
+	blockDisposableEmail bool
 }
 
 // NewPasswordService creates a new password service.
-func NewPasswordService(db *sql.DB, users *repository.UsersRepository, creds *repository.CredentialsRepository) *PasswordService {
+func NewPasswordService(db *sql.DB, users *repository.UsersRepository, creds *repository.CredentialsRepository, policy *PasswordPolicy, strictEmailValidation, blockDisposableEmail bool) *PasswordService {
 	return &PasswordService{
-		db:    db,
-		users: users,
-		creds: creds,
+		db:                   db,
+		users:                users,
+		creds:                creds,
+		policy:               policy,
+		strictEmailValidation: strictEmailValidation,
+		blockDisposableEmail: blockDisposableEmail,
 	}
 }
 
 // Register creates a new user with password credentials.
 func (s *PasswordService) Register(ctx context.Context, email, password, name string, username *string) (*domain.User, error) {
+	// Validate and normalize email
+	if err := ValidateEmail(email, s.strictEmailValidation, s.blockDisposableEmail); err != nil {
+		return nil, err
+	}
+	email = NormalizeEmail(email)
+
+	// Validate password against policy
+	if s.policy != nil {
+		if err := s.policy.ValidatePassword(password); err != nil {
+			return nil, err
+		}
+	}
+
+	// Sanitize name
+	name = SanitizeName(name)
+
 	// Check if user already exists by email
 	exists, err := s.users.ExistsByEmail(ctx, email)
 	if err != nil {
@@ -160,6 +182,13 @@ func (s *PasswordService) GetUserByID(ctx context.Context, userID uuid.UUID) (*d
 
 // ChangePassword changes a user's password.
 func (s *PasswordService) ChangePassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
+	// Validate password against policy
+	if s.policy != nil {
+		if err := s.policy.ValidatePassword(newPassword); err != nil {
+			return err
+		}
+	}
+
 	hash, err := HashPassword(newPassword)
 	if err != nil {
 		return err

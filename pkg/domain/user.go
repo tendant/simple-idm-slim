@@ -15,6 +15,7 @@ type User struct {
 	Name                 *string
 	FailedLoginAttempts  int
 	LockedUntil          *time.Time
+	MFAEnabled           bool
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	DeletedAt            *time.Time

@@ -11,6 +11,7 @@ type VerificationTokenKind string
 const (
 	TokenKindEmailVerification VerificationTokenKind = "email_verification"
 	TokenKindPasswordReset     VerificationTokenKind = "password_reset"
+	TokenKindMFAChallenge      VerificationTokenKind = "mfa_challenge"
 )
 
 type VerificationToken struct {

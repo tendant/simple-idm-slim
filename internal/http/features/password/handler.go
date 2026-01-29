@@ -23,6 +23,7 @@ type Handler struct {
 	sessionService      *auth.SessionService
 	verificationService *auth.VerificationService
 	emailService        *notification.EmailService
+	mfaService          *auth.MFAService
 	cookieConfig        httputil.CookieConfig
 	appBaseURL          string
 }
@@ -34,6 +35,7 @@ func NewHandler(
 	sessionService *auth.SessionService,
 	verificationService *auth.VerificationService,
 	emailService *notification.EmailService,
+	mfaService *auth.MFAService,
 	appBaseURL string,
 ) *Handler {
 	return &Handler{
@@ -42,6 +44,7 @@ func NewHandler(
 		sessionService:      sessionService,
 		verificationService: verificationService,
 		emailService:        emailService,
+		mfaService:          mfaService,
 		cookieConfig:        httputil.DefaultCookieConfig(),
 		appBaseURL:          appBaseURL,
 	}
@@ -192,9 +195,30 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if MFA is enabled
+	if user.MFAEnabled && h.mfaService != nil {
+		// Create MFA challenge token
+		challengeToken, err := h.mfaService.CreateMFAChallenge(r.Context(), userID, r.RemoteAddr, r.UserAgent())
+		if err != nil {
+			h.logger.Error("failed to create MFA challenge", "error", err)
+			httputil.Error(w, http.StatusInternalServerError, "authentication failed")
+			return
+		}
+
+		// Return challenge (not full session)
+		httputil.JSON(w, http.StatusOK, map[string]interface{}{
+			"mfa_required":    true,
+			"challenge_token": challengeToken,
+			"message":         "MFA verification required",
+		})
+		return
+	}
+
+	// No MFA: proceed with normal session issuance
 	opts := auth.IssueSessionOpts{
-		IP:        r.RemoteAddr,
-		UserAgent: r.UserAgent(),
+		IP:          r.RemoteAddr,
+		UserAgent:   r.UserAgent(),
+		MFAVerified: false, // Not needed since user.MFAEnabled = false
 	}
 	tokens, err := h.sessionService.IssueSession(r.Context(), userID, opts)
 	if err != nil {

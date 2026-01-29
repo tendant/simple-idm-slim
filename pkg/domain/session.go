@@ -21,8 +21,11 @@ type Session struct {
 
 // SessionMetadata holds optional session context.
 type SessionMetadata struct {
-	IP        string `json:"ip,omitempty"`
-	UserAgent string `json:"user_agent,omitempty"`
+	IP                string `json:"ip,omitempty"`
+	UserAgent         string `json:"user_agent,omitempty"`
+	FingerprintHash   string `json:"fingerprint_hash,omitempty"`
+	FingerprintIP     string `json:"fingerprint_ip,omitempty"`
+	FingerprintUA     string `json:"fingerprint_ua,omitempty"`
 }
 
 // IsValid checks if the session is valid (not expired and not revoked).

@@ -74,7 +74,8 @@ func TestPasswordService_ValidateUsernameFormat(t *testing.T) {
 
 func TestPasswordService_Structure(t *testing.T) {
 	// Test that password service can be instantiated
-	service := NewPasswordService(nil, nil, nil)
+	policy := &PasswordPolicy{}
+	service := NewPasswordService(nil, nil, nil, policy, false, false)
 
 	if service == nil {
 		t.Fatal("NewPasswordService should not return nil")

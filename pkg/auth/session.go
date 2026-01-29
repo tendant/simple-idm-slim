@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -22,10 +23,12 @@ const (
 
 // SessionConfig holds session configuration.
 type SessionConfig struct {
-	AccessTokenTTL  time.Duration
-	RefreshTokenTTL time.Duration
-	JWTSecret       []byte
-	Issuer          string
+	AccessTokenTTL       time.Duration
+	RefreshTokenTTL      time.Duration
+	JWTSecret            []byte
+	Issuer               string
+	FingerprintEnabled   bool
+	DetectReuseEnabled   bool
 }
 
 // SessionService handles session management (the IssueSession function from the design).
@@ -61,14 +64,15 @@ func (s *SessionService) RefreshTokenTTL() time.Duration {
 }
 
 // IssueSessionOpts holds options for session issuance.
-// This is the extension point for future 2FA support.
 type IssueSessionOpts struct {
 	// IP address of the client
 	IP string
 	// User agent of the client
 	UserAgent string
-	// RequireMFA can be set to true later to gate session issuance on MFA verification
-	// RequireMFA bool
+	// Request is the HTTP request (for fingerprinting)
+	Request *http.Request
+	// MFAVerified indicates whether MFA was verified for this session
+	MFAVerified bool
 }
 
 // AccessTokenClaims represents the claims in an access token.
@@ -77,6 +81,7 @@ type AccessTokenClaims struct {
 	Email         string `json:"email,omitempty"`
 	EmailVerified bool   `json:"email_verified,omitempty"`
 	Name          string `json:"name,omitempty"`
+	MFAVerified   bool   `json:"mfa_verified,omitempty"`
 }
 
 // IssueSession creates a new session and returns access/refresh tokens.
@@ -107,12 +112,21 @@ func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opt
 		ExpiresAt: now.Add(s.config.RefreshTokenTTL),
 	}
 
-	// Store metadata if provided
-	if opts.IP != "" || opts.UserAgent != "" {
+	// Store metadata and fingerprint if provided
+	if opts.IP != "" || opts.UserAgent != "" || opts.Request != nil {
 		metadata := domain.SessionMetadata{
 			IP:        opts.IP,
 			UserAgent: opts.UserAgent,
 		}
+
+		// Add fingerprint if enabled and request provided
+		if s.config.FingerprintEnabled && opts.Request != nil {
+			fp := GenerateFingerprint(opts.Request)
+			metadata.FingerprintHash = fp.Hash
+			metadata.FingerprintIP = fp.IPAddress
+			metadata.FingerprintUA = fp.UserAgent
+		}
+
 		metadataJSON, _ := json.Marshal(metadata)
 		session.Metadata = metadataJSON
 	}
@@ -138,6 +152,7 @@ func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opt
 		Email:         user.Email,
 		EmailVerified: user.EmailVerified,
 		Name:          name,
+		MFAVerified:   !user.MFAEnabled || opts.MFAVerified,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -173,6 +188,24 @@ func (s *SessionService) RefreshSession(ctx context.Context, refreshToken string
 		return nil, domain.ErrSessionExpired
 	}
 
+	// Validate fingerprint if enabled
+	if s.config.FingerprintEnabled && opts.Request != nil && len(session.Metadata) > 0 {
+		var metadata domain.SessionMetadata
+		if err := json.Unmarshal(session.Metadata, &metadata); err == nil && metadata.FingerprintHash != "" {
+			currentFp := GenerateFingerprint(opts.Request)
+
+			// Check if fingerprint matches
+			if metadata.FingerprintHash != currentFp.Hash {
+				// Fingerprint mismatch - possible token theft
+				if s.config.DetectReuseEnabled {
+					// Revoke the session for security
+					_ = s.sessions.Revoke(ctx, session.ID)
+					return nil, domain.ErrSessionFingerprint
+				}
+			}
+		}
+	}
+
 	// Update last seen
 	_ = s.sessions.UpdateLastSeen(ctx, session.ID)
 
@@ -200,6 +233,7 @@ func (s *SessionService) RefreshSession(ctx context.Context, refreshToken string
 		Email:         user.Email,
 		EmailVerified: user.EmailVerified,
 		Name:          name,
+		MFAVerified:   !user.MFAEnabled || opts.MFAVerified,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

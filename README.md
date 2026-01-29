@@ -10,6 +10,8 @@ A minimal, embeddable identity management library for Go applications.
 - JWT access tokens + opaque refresh tokens
 - Session management with token revocation
 - User profile management
+- **Multi-Factor Authentication (MFA/2FA)**: TOTP-based two-factor authentication with recovery codes
+- **Security**: Comprehensive rate limiting, password policies, security headers, session fingerprinting
 - Built on chi router with standard library compatibility
 - **Extensible**: Core packages in `pkg/` allow custom implementations
 
@@ -82,6 +84,11 @@ func main() {
 | PATCH | `/me` | Update profile (protected) |
 | GET | `/google/start` | Start Google OAuth (if configured) |
 | GET | `/google/callback` | Google OAuth callback (if configured) |
+| GET | `/me/mfa/status` | Get MFA status (protected) |
+| POST | `/me/mfa/setup` | Setup MFA (protected) |
+| POST | `/me/mfa/enable` | Enable MFA (protected) |
+| POST | `/me/mfa/disable` | Disable MFA (protected) |
+| POST | `/auth/mfa/verify` | Verify MFA challenge |
 
 ## Mounting Options
 
@@ -146,6 +153,255 @@ idm.New(idm.Config{
     Google:          &idm.GoogleConfig{},   // optional
 })
 ```
+
+## Security Features
+
+simple-idm-slim includes comprehensive security features to protect your application:
+
+### Multi-Factor Authentication (MFA/2FA)
+
+TOTP-based two-factor authentication adds an extra layer of security:
+
+```bash
+# Enable MFA (enabled by default)
+MFA_ENABLED=true
+
+# Generate encryption key for storing TOTP secrets
+# Run: openssl rand -hex 32
+MFA_ENCRYPTION_KEY=<64-char-hex-string>
+```
+
+**Features:**
+- **TOTP Standard**: RFC 6238 compliant (works with Google Authenticator, Authy, 1Password, etc.)
+- **QR Code Setup**: Easy enrollment via QR code or manual entry
+- **Recovery Codes**: 8 one-time backup codes (hashed with Argon2id)
+- **Challenge Token**: 5-minute expiry for security
+- **Backward Compatible**: Existing users continue to work without MFA
+
+**Setup Flow:**
+
+1. **User enables MFA:**
+   ```bash
+   POST /v1/me/mfa/setup
+   {
+     "password": "user_password"
+   }
+
+   # Returns QR code, secret, and recovery codes
+   ```
+
+2. **User scans QR code** with authenticator app (Google Authenticator, Authy, etc.)
+
+3. **User verifies and enables:**
+   ```bash
+   POST /v1/me/mfa/enable
+   {
+     "code": "123456"  # 6-digit TOTP code
+   }
+   ```
+
+**Login Flow with MFA:**
+
+1. **Initial login:**
+   ```bash
+   POST /v1/auth/password/login
+   {
+     "identifier": "user@example.com",
+     "password": "password123"
+   }
+
+   # If MFA enabled, returns:
+   {
+     "mfa_required": true,
+     "challenge_token": "...",
+     "message": "MFA verification required"
+   }
+   ```
+
+2. **Complete MFA verification:**
+   ```bash
+   POST /v1/auth/mfa/verify
+   {
+     "challenge_token": "...",
+     "code": "123456"  # TOTP code or recovery code
+   }
+
+   # Returns full session tokens
+   ```
+
+**Disable MFA:**
+
+```bash
+POST /v1/me/mfa/disable
+{
+  "password": "user_password",
+  "code": "123456"  # TOTP or recovery code
+}
+
+# All sessions are revoked for security
+```
+
+**Check MFA Status:**
+
+```bash
+GET /v1/me/mfa/status
+
+# Returns:
+{
+  "enabled": true,
+  "recovery_codes_remaining": 7
+}
+```
+
+**Security Considerations:**
+
+- TOTP secrets encrypted at rest with AES-256-GCM
+- Recovery codes hashed with Argon2id (same as passwords)
+- Challenge tokens expire after 5 minutes
+- One-time use recovery codes
+- Rate limiting on verification endpoint (10 req/min)
+- ±30 seconds clock drift tolerance
+- `MFAVerified` claim in JWT for fine-grained access control
+
+### Rate Limiting
+
+Configurable rate limiting protects against brute force attacks and API abuse:
+
+- **Auth endpoints** (login, register): 10 requests/minute (default)
+- **Password reset**: 3 requests/5 minutes (default)
+- **Email verification**: 5 requests/5 minutes (default)
+- **Token refresh**: 20 requests/minute (default)
+- **Profile endpoints**: 30 requests/minute (default)
+
+All limits are configurable via environment variables. See `.env.example` for details.
+
+Rate limit violations are logged with IP, path, method, and user agent for security monitoring.
+
+### Password Policy
+
+Enforce password complexity requirements:
+
+```go
+auth, _ := idm.New(idm.Config{
+    DB:        db,
+    JWTSecret: "...",
+    PasswordPolicy: &idm.PasswordPolicyConfig{
+        MinLength:        12,
+        RequireUppercase: true,
+        RequireLowercase: true,
+        RequireNumber:    true,
+        RequireSpecial:   true,
+    },
+})
+```
+
+Or via environment variables:
+```bash
+PASSWORD_MIN_LENGTH=12
+PASSWORD_REQUIRE_UPPERCASE=true
+PASSWORD_REQUIRE_LOWERCASE=true
+PASSWORD_REQUIRE_NUMBER=true
+PASSWORD_REQUIRE_SPECIAL=true
+```
+
+### Security Headers
+
+OWASP-recommended security headers are automatically applied:
+
+- **Content-Security-Policy**: Prevents XSS attacks
+- **Strict-Transport-Security (HSTS)**: Enforces HTTPS
+- **X-Frame-Options**: Prevents clickjacking
+- **X-Content-Type-Options**: Prevents MIME sniffing
+- **X-XSS-Protection**: Legacy XSS protection
+- **Referrer-Policy**: Controls referrer information
+- **Permissions-Policy**: Controls browser features
+
+All headers are configurable via environment variables.
+
+### Session Security
+
+Enhanced session security features:
+
+#### Session Fingerprinting
+
+Detects token theft by tracking device fingerprints (IP + User-Agent):
+
+```go
+auth, _ := idm.New(idm.Config{
+    DB:        db,
+    JWTSecret: "...",
+    SessionSecurity: &idm.SessionSecurityConfig{
+        FingerprintEnabled: true,
+        DetectReuse:        true,
+    },
+})
+```
+
+When fingerprint mismatches are detected, the session is automatically revoked.
+
+#### Secure Cookies
+
+Configure cookie security settings:
+
+```bash
+COOKIE_SECURE=true      # Set to true in production (requires HTTPS)
+COOKIE_SAMESITE=Strict  # Strict, Lax, or None
+```
+
+### Input Validation
+
+Comprehensive input validation and sanitization:
+
+- **Email validation**: RFC 5322 compliant with optional disposable domain blocking
+- **Input sanitization**: HTML escaping and control character removal
+- **Request size limits**: Prevents memory exhaustion (default: 1MB)
+
+```bash
+STRICT_EMAIL_VALIDATION=true
+BLOCK_DISPOSABLE_EMAIL=true
+MAX_REQUEST_BODY_SIZE=1048576
+```
+
+### Production Recommendations
+
+For production deployments:
+
+1. **Enable all security features**:
+   ```bash
+   RATE_LIMIT_ENABLED=true
+   SECURITY_HEADERS_ENABLED=true
+   SESSION_FINGERPRINT_ENABLED=true
+   SESSION_DETECT_REUSE=true
+   ```
+
+2. **Enforce strong passwords**:
+   ```bash
+   PASSWORD_MIN_LENGTH=12
+   PASSWORD_REQUIRE_UPPERCASE=true
+   PASSWORD_REQUIRE_LOWERCASE=true
+   PASSWORD_REQUIRE_NUMBER=true
+   PASSWORD_REQUIRE_SPECIAL=true
+   ```
+
+3. **Use secure cookies (requires HTTPS)**:
+   ```bash
+   COOKIE_SECURE=true
+   COOKIE_SAMESITE=Strict
+   ```
+
+4. **Enable strict validation**:
+   ```bash
+   STRICT_EMAIL_VALIDATION=true
+   BLOCK_DISPOSABLE_EMAIL=true
+   ```
+
+5. **Enable MFA** (recommended):
+   ```bash
+   MFA_ENABLED=true
+   MFA_ENCRYPTION_KEY=<generate with: openssl rand -hex 32>
+   ```
+
+See `.env.example` for complete configuration options.
 
 ## API Reference
 
@@ -217,17 +473,19 @@ func (r *MongoUsersRepo) GetByEmail(ctx context.Context, email string) (*domain.
 }
 ```
 
-### Custom Authentication Logic
+### Enforce MFA for Sensitive Operations
+
+Use the `RequireMFA` middleware for endpoints requiring MFA verification:
 
 ```go
-import "github.com/tendant/simple-idm-slim/pkg/auth"
+import "github.com/tendant/simple-idm-slim/internal/http/middleware"
 
-// Add MFA, custom password hashing, etc.
-type MFAPasswordService struct {
-    *auth.PasswordService
-    totpService *TOTPService
-}
+r.With(middleware.Auth(sessionService)).
+  With(middleware.RequireMFA()).
+  Delete("/v1/me", meHandler.DeleteMe)
 ```
+
+This checks the `MFAVerified` claim in the JWT and returns 403 if MFA was not verified.
 
 ## Package Structure
 

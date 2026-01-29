@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -58,14 +59,26 @@ func main() {
 	identitiesRepo := repository.NewIdentitiesRepository(db)
 	sessionsRepo := repository.NewSessionsRepository(db)
 	verificationTokensRepo := repository.NewVerificationTokensRepository(db)
+	mfaSecretsRepo := repository.NewMFASecretsRepository(db)
+	mfaRecoveryCodesRepo := repository.NewMFARecoveryCodesRepository(db)
 
 	// Initialize services
-	passwordService := auth.NewPasswordService(db, usersRepo, credsRepo)
+	passwordPolicy := auth.NewPasswordPolicy(cfg.PasswordPolicy)
+	passwordService := auth.NewPasswordService(
+		db,
+		usersRepo,
+		credsRepo,
+		passwordPolicy,
+		cfg.Validation.StrictEmailValidation,
+		cfg.Validation.BlockDisposableEmail,
+	)
 	sessionService := auth.NewSessionService(auth.SessionConfig{
-		AccessTokenTTL:  cfg.AccessTokenTTL,
-		RefreshTokenTTL: cfg.RefreshTokenTTL,
-		JWTSecret:       []byte(cfg.JWTSecret),
-		Issuer:          cfg.JWTIssuer,
+		AccessTokenTTL:     cfg.AccessTokenTTL,
+		RefreshTokenTTL:    cfg.RefreshTokenTTL,
+		JWTSecret:          []byte(cfg.JWTSecret),
+		Issuer:             cfg.JWTIssuer,
+		FingerprintEnabled: cfg.SessionSecurity.FingerprintEnabled,
+		DetectReuseEnabled: cfg.SessionSecurity.DetectReuse,
 	}, sessionsRepo, usersRepo)
 
 	verificationService := auth.NewVerificationService(auth.VerificationConfig{
@@ -103,6 +116,29 @@ func main() {
 		logger.Info("Google OAuth enabled")
 	}
 
+	// Initialize MFA service if configured
+	var mfaService *auth.MFAService
+	if cfg.HasMFA() {
+		encryptionKey, err := hex.DecodeString(cfg.MFAEncryptionKey)
+		if err != nil || len(encryptionKey) != 32 {
+			logger.Error("MFA_ENCRYPTION_KEY must be 64-char hex (32 bytes)")
+			os.Exit(1)
+		}
+
+		mfaService = auth.NewMFAService(
+			auth.MFAConfig{
+				Issuer:        cfg.JWTIssuer,
+				EncryptionKey: encryptionKey,
+			},
+			db,
+			mfaSecretsRepo,
+			mfaRecoveryCodesRepo,
+			usersRepo,
+			verificationTokensRepo,
+		)
+		logger.Info("MFA service enabled")
+	}
+
 	// Create router
 	router := httpserver.NewRouter(httpserver.RouterConfig{
 		Logger:              logger,
@@ -111,10 +147,15 @@ func main() {
 		SessionService:      sessionService,
 		VerificationService: verificationService,
 		EmailService:        emailService,
+		MFAService:          mfaService,
 		UsersRepo:           usersRepo,
 		AppBaseURL:          cfg.AppBaseURL,
 		ServeUI:             cfg.ServeUI,
 		TemplatesDir:        "web/templates",
+		RateLimitConfig:     cfg.RateLimit,
+		SecurityHeaders:     cfg.SecurityHeaders,
+		Validation:          cfg.Validation,
+		SessionSecurity:     cfg.SessionSecurity,
 	})
 
 	// Create HTTP server

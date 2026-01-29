@@ -80,6 +80,33 @@ type Config struct {
 
 	// Logger is the structured logger (default: slog.Default()).
 	Logger *slog.Logger
+
+	// PasswordPolicy defines password complexity requirements (optional).
+	PasswordPolicy *PasswordPolicyConfig
+
+	// SessionSecurity configures session security features (optional).
+	SessionSecurity *SessionSecurityConfig
+
+	// StrictEmailValidation enables stricter email format validation (default: true).
+	StrictEmailValidation bool
+
+	// BlockDisposableEmail blocks known disposable email domains (default: false).
+	BlockDisposableEmail bool
+}
+
+// PasswordPolicyConfig defines password complexity requirements.
+type PasswordPolicyConfig struct {
+	MinLength        int
+	RequireUppercase bool
+	RequireLowercase bool
+	RequireNumber    bool
+	RequireSpecial   bool
+}
+
+// SessionSecurityConfig configures session security features.
+type SessionSecurityConfig struct {
+	FingerprintEnabled bool
+	DetectReuse        bool
 }
 
 // GoogleConfig holds Google OAuth configuration.
@@ -124,12 +151,42 @@ func New(cfg Config) (*IDM, error) {
 	sessionsRepo := repository.NewSessionsRepository(cfg.DB)
 
 	// Initialize services
-	passwordService := auth.NewPasswordService(cfg.DB, usersRepo, credsRepo)
+	var passwordPolicy *auth.PasswordPolicy
+	if cfg.PasswordPolicy != nil {
+		passwordPolicy = &auth.PasswordPolicy{
+			MinLength:        cfg.PasswordPolicy.MinLength,
+			RequireUppercase: cfg.PasswordPolicy.RequireUppercase,
+			RequireLowercase: cfg.PasswordPolicy.RequireLowercase,
+			RequireNumber:    cfg.PasswordPolicy.RequireNumber,
+			RequireSpecial:   cfg.PasswordPolicy.RequireSpecial,
+		}
+	} else {
+		passwordPolicy = &auth.PasswordPolicy{}
+	}
+
+	passwordService := auth.NewPasswordService(
+		cfg.DB,
+		usersRepo,
+		credsRepo,
+		passwordPolicy,
+		cfg.StrictEmailValidation,
+		cfg.BlockDisposableEmail,
+	)
+
+	fingerprintEnabled := false
+	detectReuse := false
+	if cfg.SessionSecurity != nil {
+		fingerprintEnabled = cfg.SessionSecurity.FingerprintEnabled
+		detectReuse = cfg.SessionSecurity.DetectReuse
+	}
+
 	sessionService := auth.NewSessionService(auth.SessionConfig{
-		AccessTokenTTL:  cfg.AccessTokenTTL,
-		RefreshTokenTTL: cfg.RefreshTokenTTL,
-		JWTSecret:       []byte(cfg.JWTSecret),
-		Issuer:          cfg.JWTIssuer,
+		AccessTokenTTL:     cfg.AccessTokenTTL,
+		RefreshTokenTTL:    cfg.RefreshTokenTTL,
+		JWTSecret:          []byte(cfg.JWTSecret),
+		Issuer:             cfg.JWTIssuer,
+		FingerprintEnabled: fingerprintEnabled,
+		DetectReuseEnabled: detectReuse,
 	}, sessionsRepo, usersRepo)
 
 	var googleService *auth.GoogleService

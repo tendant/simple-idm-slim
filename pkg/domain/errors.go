@@ -12,6 +12,7 @@ var (
 	ErrSessionNotFound           = errors.New("session not found")
 	ErrSessionExpired            = errors.New("session expired")
 	ErrSessionRevoked            = errors.New("session revoked")
+	ErrSessionFingerprint        = errors.New("session fingerprint mismatch - possible token theft")
 	ErrInvalidToken              = errors.New("invalid token")
 	ErrIdentityNotFound          = errors.New("identity not found")
 	ErrIdentityAlreadyLinked     = errors.New("identity already linked to another user")
@@ -27,4 +28,14 @@ var (
 	ErrInvalidUsername  = errors.New("invalid username format")
 	ErrWeakPassword     = errors.New("password does not meet requirements")
 	ErrEmailNotVerified = errors.New("email not verified")
+)
+
+// MFA errors
+var (
+	ErrMFARequired         = errors.New("multi-factor authentication required")
+	ErrMFANotEnabled       = errors.New("MFA is not enabled for this account")
+	ErrMFAAlreadyEnabled   = errors.New("MFA is already enabled")
+	ErrInvalidMFACode      = errors.New("invalid MFA code")
+	ErrInvalidRecoveryCode = errors.New("invalid or already used recovery code")
+	ErrMFAChallengeExpired = errors.New("MFA challenge expired")
 )

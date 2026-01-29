@@ -3,14 +3,14 @@ package http
 import (
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/httprate"
 	"github.com/tendant/simple-idm-slim/pkg/auth"
+	"github.com/tendant/simple-idm-slim/internal/config"
 	"github.com/tendant/simple-idm-slim/internal/http/features/email"
 	"github.com/tendant/simple-idm-slim/internal/http/features/google"
 	"github.com/tendant/simple-idm-slim/internal/http/features/me"
+	"github.com/tendant/simple-idm-slim/internal/http/features/mfa"
 	"github.com/tendant/simple-idm-slim/internal/http/features/pages"
 	"github.com/tendant/simple-idm-slim/internal/http/features/password"
 	"github.com/tendant/simple-idm-slim/internal/http/features/session"
@@ -28,10 +28,15 @@ type RouterConfig struct {
 	SessionService      *auth.SessionService
 	VerificationService *auth.VerificationService
 	EmailService        *notification.EmailService
+	MFAService          *auth.MFAService
 	UsersRepo           *repository.UsersRepository
 	AppBaseURL          string
 	ServeUI             bool
 	TemplatesDir        string
+	RateLimitConfig     config.RateLimitConfig
+	SecurityHeaders     config.SecurityHeadersConfig
+	Validation          config.ValidationConfig
+	SessionSecurity     config.SessionSecurityConfig
 }
 
 // NewRouter creates a new HTTP router with all routes registered.
@@ -41,6 +46,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Apply global middleware
 	r.Use(middleware.Recover(cfg.Logger))
 	r.Use(middleware.Logging(cfg.Logger))
+	r.Use(middleware.SecurityHeaders(cfg.SecurityHeaders))
+	r.Use(middleware.RequestSizeLimit(cfg.Validation.MaxRequestBodySize))
 
 	// Health check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -48,29 +55,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	})
 
 	// Create rate limiters for different endpoint types
-	authRateLimiter := httprate.Limit(
-		10,                // 10 requests
-		time.Minute,       // per minute
-		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
-			httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded. please try again later")
-		}),
-	)
-
-	resetRateLimiter := httprate.Limit(
-		3,                 // 3 requests
-		5*time.Minute,     // per 5 minutes
-		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
-			httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded. please try again later")
-		}),
-	)
-
-	verifyRateLimiter := httprate.Limit(
-		5,                 // 5 requests
-		5*time.Minute,     // per 5 minutes
-		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
-			httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded. please try again later")
-		}),
-	)
+	rateLimiters := middleware.CreateRateLimiters(cfg.RateLimitConfig, cfg.Logger)
 
 	// Register password authentication routes
 	passwordHandler := password.NewHandler(
@@ -79,15 +64,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.SessionService,
 		cfg.VerificationService,
 		cfg.EmailService,
+		cfg.MFAService,
 		cfg.AppBaseURL,
 	)
 	r.Group(func(r chi.Router) {
-		r.Use(authRateLimiter)
+		r.Use(rateLimiters["auth"])
 		r.Post("/v1/auth/password/register", passwordHandler.Register)
 		r.Post("/v1/auth/password/login", passwordHandler.Login)
 	})
 	r.Group(func(r chi.Router) {
-		r.Use(resetRateLimiter)
+		r.Use(rateLimiters["reset"])
 		r.Post("/v1/auth/password/reset-request", passwordHandler.RequestPasswordReset)
 		r.Post("/v1/auth/password/reset", passwordHandler.ResetPassword)
 	})
@@ -101,7 +87,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Register session routes
 	sessionHandler := session.NewHandler(cfg.SessionService)
-	r.Post("/v1/auth/refresh", sessionHandler.Refresh)
+	r.Group(func(r chi.Router) {
+		r.Use(rateLimiters["refresh"])
+		r.Post("/v1/auth/refresh", sessionHandler.Refresh)
+	})
 	r.Post("/v1/auth/logout", sessionHandler.Logout)
 	r.With(middleware.Auth(cfg.SessionService)).Post("/v1/auth/logout/all", sessionHandler.LogoutAll)
 
@@ -115,9 +104,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cfg.EmailService,
 		cfg.AppBaseURL,
 	)
-	r.With(middleware.Auth(cfg.SessionService)).Get("/v1/me", meHandler.GetMe)
-	r.With(middleware.Auth(cfg.SessionService)).Patch("/v1/me", meHandler.UpdateMe)
-	r.With(middleware.Auth(cfg.SessionService)).Delete("/v1/me", meHandler.DeleteMe)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.SessionService))
+		r.Use(rateLimiters["profile"])
+		r.Get("/v1/me", meHandler.GetMe)
+		r.Patch("/v1/me", meHandler.UpdateMe)
+		r.Delete("/v1/me", meHandler.DeleteMe)
+	})
 
 	// Email verification routes (if email service is configured)
 	if cfg.EmailService != nil {
@@ -129,9 +122,39 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			cfg.PasswordService,
 			cfg.AppBaseURL,
 		)
-		r.Post("/v1/auth/verify-email", emailHandler.VerifyEmail)
-		r.With(middleware.Auth(cfg.SessionService)).Post("/v1/auth/resend-verification", emailHandler.ResendVerificationEmail)
-		r.With(verifyRateLimiter).Post("/v1/auth/request-verification", emailHandler.RequestVerificationEmail)
+		r.With(rateLimiters["verify"]).Post("/v1/auth/verify-email", emailHandler.VerifyEmail)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Auth(cfg.SessionService))
+			r.Use(rateLimiters["verify"])
+			r.Post("/v1/auth/resend-verification", emailHandler.ResendVerificationEmail)
+		})
+		r.With(rateLimiters["verify"]).Post("/v1/auth/request-verification", emailHandler.RequestVerificationEmail)
+	}
+
+	// MFA routes (if MFA service is configured)
+	if cfg.MFAService != nil {
+		mfaHandler := mfa.NewHandler(
+			cfg.Logger,
+			cfg.MFAService,
+			cfg.PasswordService,
+			cfg.SessionService,
+		)
+
+		// Authenticated MFA management
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Auth(cfg.SessionService))
+			r.Use(rateLimiters["profile"])
+			r.Get("/v1/me/mfa/status", mfaHandler.Status)
+			r.Post("/v1/me/mfa/setup", mfaHandler.Setup)
+			r.Post("/v1/me/mfa/enable", mfaHandler.Enable)
+			r.Post("/v1/me/mfa/disable", mfaHandler.Disable)
+		})
+
+		// Unauthenticated MFA verification
+		r.Group(func(r chi.Router) {
+			r.Use(rateLimiters["auth"])
+			r.Post("/v1/auth/mfa/verify", mfaHandler.Verify)
+		})
 	}
 
 	// Authentication pages (if UI is enabled)
