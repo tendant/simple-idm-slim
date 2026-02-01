@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -132,31 +133,83 @@ func (s *PasswordService) Authenticate(ctx context.Context, identifier, password
 		lockoutDuration   = 15 * time.Minute
 	)
 
+	// Mask identifier for logging
+	maskedIdentifier := identifier
+	if len(identifier) > 3 {
+		maskedIdentifier = identifier[:3] + "***"
+	}
+
+	slog.Debug("PasswordService.Authenticate: looking up user",
+		"identifier", maskedIdentifier,
+	)
+
 	// Find user by email or username
 	user, err := s.users.GetByEmailOrUsername(ctx, identifier)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
+			slog.Debug("PasswordService.Authenticate: user not found",
+				"identifier", maskedIdentifier,
+			)
 			return uuid.Nil, domain.ErrInvalidCredentials
 		}
+		slog.Error("PasswordService.Authenticate: database error looking up user",
+			"identifier", maskedIdentifier,
+			"error", err,
+		)
 		return uuid.Nil, err
 	}
 
+	slog.Debug("PasswordService.Authenticate: user found",
+		"identifier", maskedIdentifier,
+		"user_id", user.ID,
+		"email_verified", user.EmailVerified,
+		"mfa_enabled", user.MFAEnabled,
+		"failed_attempts", user.FailedLoginAttempts,
+	)
+
 	// Check if account is currently locked
 	if user.IsLocked() {
+		slog.Warn("PasswordService.Authenticate: account is locked",
+			"user_id", user.ID,
+			"identifier", maskedIdentifier,
+			"locked_until", user.LockedUntil,
+		)
 		return uuid.Nil, domain.ErrAccountLocked
 	}
 
 	// Get password credentials
+	slog.Debug("PasswordService.Authenticate: fetching password credentials",
+		"user_id", user.ID,
+	)
+
 	cred, err := s.creds.GetByUserID(ctx, user.ID)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
+			slog.Warn("PasswordService.Authenticate: no password credentials found for user",
+				"user_id", user.ID,
+				"identifier", maskedIdentifier,
+			)
 			return uuid.Nil, domain.ErrInvalidCredentials
 		}
+		slog.Error("PasswordService.Authenticate: database error fetching credentials",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return uuid.Nil, err
 	}
 
+	slog.Debug("PasswordService.Authenticate: verifying password",
+		"user_id", user.ID,
+		"hash_length", len(cred.PasswordHash),
+	)
+
 	// Verify password
 	if !VerifyPassword(password, cred.PasswordHash) {
+		slog.Warn("PasswordService.Authenticate: password verification failed",
+			"user_id", user.ID,
+			"identifier", maskedIdentifier,
+			"failed_attempts", user.FailedLoginAttempts+1,
+		)
 		// Increment failed login attempts
 		_ = s.users.IncrementFailedLoginAttempts(ctx, user.ID, lockoutDuration, maxFailedAttempts)
 		return uuid.Nil, domain.ErrInvalidCredentials
@@ -164,8 +217,16 @@ func (s *PasswordService) Authenticate(ctx context.Context, identifier, password
 
 	// Successful login - reset failed attempts
 	if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
+		slog.Debug("PasswordService.Authenticate: resetting failed login attempts",
+			"user_id", user.ID,
+		)
 		_ = s.users.ResetFailedLoginAttempts(ctx, user.ID)
 	}
+
+	slog.Info("PasswordService.Authenticate: authentication successful",
+		"user_id", user.ID,
+		"identifier", maskedIdentifier,
+	)
 
 	return user.ID, nil
 }

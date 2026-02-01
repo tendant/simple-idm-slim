@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -87,17 +88,35 @@ type AccessTokenClaims struct {
 // IssueSession creates a new session and returns access/refresh tokens.
 // This is the single entry point for session creation - all auth methods use this.
 func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opts IssueSessionOpts) (*domain.TokenPair, error) {
+	slog.Debug("SessionService.IssueSession: starting session issuance",
+		"user_id", userID,
+		"client_ip", opts.IP,
+	)
+
 	// Get user for token claims
 	user, err := s.users.GetByID(ctx, userID)
 	if err != nil {
+		slog.Error("SessionService.IssueSession: failed to get user",
+			"user_id", userID,
+			"error", err,
+		)
 		return nil, err
 	}
+
+	slog.Debug("SessionService.IssueSession: user retrieved",
+		"user_id", userID,
+		"email", user.Email,
+	)
 
 	now := time.Now()
 
 	// Generate refresh token (opaque, stored hashed)
 	refreshToken, err := GenerateToken(refreshTokenLen)
 	if err != nil {
+		slog.Error("SessionService.IssueSession: failed to generate refresh token",
+			"user_id", userID,
+			"error", err,
+		)
 		return nil, err
 	}
 	refreshTokenHash := HashToken(refreshToken)
@@ -111,6 +130,12 @@ func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opt
 		CreatedAt: now,
 		ExpiresAt: now.Add(s.config.RefreshTokenTTL),
 	}
+
+	slog.Debug("SessionService.IssueSession: creating session record",
+		"session_id", sessionID,
+		"user_id", userID,
+		"expires_at", session.ExpiresAt,
+	)
 
 	// Store metadata and fingerprint if provided
 	if opts.IP != "" || opts.UserAgent != "" || opts.Request != nil {
@@ -132,8 +157,18 @@ func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opt
 	}
 
 	if err := s.sessions.Create(ctx, session); err != nil {
+		slog.Error("SessionService.IssueSession: failed to create session in database",
+			"session_id", sessionID,
+			"user_id", userID,
+			"error", err,
+		)
 		return nil, err
 	}
+
+	slog.Debug("SessionService.IssueSession: session created, generating access token",
+		"session_id", sessionID,
+		"user_id", userID,
+	)
 
 	// Generate access token (JWT)
 	accessTokenExpiry := now.Add(s.config.AccessTokenTTL)
@@ -158,8 +193,19 @@ func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opt
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	accessToken, err := token.SignedString(s.config.JWTSecret)
 	if err != nil {
+		slog.Error("SessionService.IssueSession: failed to sign access token",
+			"session_id", sessionID,
+			"user_id", userID,
+			"error", err,
+		)
 		return nil, err
 	}
+
+	slog.Info("SessionService.IssueSession: session issued successfully",
+		"session_id", sessionID,
+		"user_id", userID,
+		"access_token_expires", accessTokenExpiry,
+	)
 
 	return &domain.TokenPair{
 		AccessToken:  accessToken,
@@ -264,20 +310,42 @@ func (s *SessionService) RevokeAllSessions(ctx context.Context, userID uuid.UUID
 
 // ValidateAccessToken validates an access token and returns the claims.
 func (s *SessionService) ValidateAccessToken(tokenString string) (*AccessTokenClaims, error) {
+	// Mask token for logging
+	maskedToken := ""
+	if len(tokenString) > 20 {
+		maskedToken = tokenString[:10] + "..." + tokenString[len(tokenString)-10:]
+	}
+
+	slog.Debug("SessionService.ValidateAccessToken: validating token",
+		"token_prefix", maskedToken,
+	)
+
 	token, err := jwt.ParseWithClaims(tokenString, &AccessTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			slog.Warn("SessionService.ValidateAccessToken: unexpected signing method",
+				"method", token.Header["alg"],
+			)
 			return nil, domain.ErrInvalidToken
 		}
 		return s.config.JWTSecret, nil
 	})
 	if err != nil {
+		slog.Debug("SessionService.ValidateAccessToken: token parsing failed",
+			"error", err,
+		)
 		return nil, domain.ErrInvalidToken
 	}
 
 	claims, ok := token.Claims.(*AccessTokenClaims)
 	if !ok || !token.Valid {
+		slog.Warn("SessionService.ValidateAccessToken: invalid token claims")
 		return nil, domain.ErrInvalidToken
 	}
+
+	slog.Debug("SessionService.ValidateAccessToken: token valid",
+		"subject", claims.Subject,
+		"expires_at", claims.ExpiresAt,
+	)
 
 	return claims, nil
 }

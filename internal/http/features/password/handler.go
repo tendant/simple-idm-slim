@@ -155,8 +155,25 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 // For web clients: Sets HttpOnly cookies, returns minimal response.
 // For mobile clients (X-Client-Type: mobile): Returns tokens in response body.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	clientIP := r.RemoteAddr
+	userAgent := r.UserAgent()
+	clientType := r.Header.Get("X-Client-Type")
+	if clientType == "" {
+		clientType = "web"
+	}
+
+	h.logger.Info("login attempt started",
+		"client_ip", clientIP,
+		"user_agent", userAgent,
+		"client_type", clientType,
+	)
+
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Warn("login failed: invalid request body",
+			"client_ip", clientIP,
+			"error", err,
+		)
 		httputil.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -167,46 +184,104 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		identifier = req.Email
 	}
 
+	// Mask identifier for logging (show first 3 chars + ***)
+	maskedIdentifier := identifier
+	if len(identifier) > 3 {
+		maskedIdentifier = identifier[:3] + "***"
+	}
+
 	if identifier == "" || req.Password == "" {
+		h.logger.Warn("login failed: missing credentials",
+			"client_ip", clientIP,
+			"identifier_provided", identifier != "",
+			"password_provided", req.Password != "",
+		)
 		httputil.Error(w, http.StatusBadRequest, "email/username and password are required")
 		return
 	}
 
+	h.logger.Debug("authenticating user",
+		"identifier", maskedIdentifier,
+		"client_ip", clientIP,
+	)
+
 	userID, err := h.passwordService.Authenticate(r.Context(), identifier, req.Password)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
+			h.logger.Warn("login failed: invalid credentials",
+				"identifier", maskedIdentifier,
+				"client_ip", clientIP,
+				"user_agent", userAgent,
+			)
 			httputil.Error(w, http.StatusUnauthorized, "invalid email/username or password")
 			return
 		}
 		if errors.Is(err, domain.ErrAccountLocked) {
+			h.logger.Warn("login failed: account locked",
+				"identifier", maskedIdentifier,
+				"client_ip", clientIP,
+			)
 			httputil.Error(w, http.StatusForbidden, "account temporarily locked due to too many failed login attempts. Please try again in 15 minutes.")
 			return
 		}
+		h.logger.Error("login failed: authentication error",
+			"identifier", maskedIdentifier,
+			"client_ip", clientIP,
+			"error", err,
+		)
 		httputil.Error(w, http.StatusInternalServerError, "authentication failed")
 		return
 	}
 
+	h.logger.Debug("credentials validated, fetching user details",
+		"user_id", userID,
+		"identifier", maskedIdentifier,
+	)
+
 	// Check if email is verified (if required)
 	user, err := h.passwordService.GetUserByID(r.Context(), userID)
 	if err != nil {
+		h.logger.Error("login failed: could not fetch user",
+			"user_id", userID,
+			"client_ip", clientIP,
+			"error", err,
+		)
 		httputil.Error(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
 
 	if h.emailVerificationRequired && !user.EmailVerified {
+		h.logger.Warn("login failed: email not verified",
+			"user_id", userID,
+			"identifier", maskedIdentifier,
+			"client_ip", clientIP,
+		)
 		httputil.Error(w, http.StatusForbidden, "email verification required. Please check your email for verification link")
 		return
 	}
 
 	// Check if MFA is enabled
 	if user.MFAEnabled && h.mfaService != nil {
+		h.logger.Info("login requires MFA",
+			"user_id", userID,
+			"identifier", maskedIdentifier,
+			"client_ip", clientIP,
+		)
 		// Create MFA challenge token
 		challengeToken, err := h.mfaService.CreateMFAChallenge(r.Context(), userID, r.RemoteAddr, r.UserAgent())
 		if err != nil {
-			h.logger.Error("failed to create MFA challenge", "error", err)
+			h.logger.Error("failed to create MFA challenge",
+				"user_id", userID,
+				"client_ip", clientIP,
+				"error", err,
+			)
 			httputil.Error(w, http.StatusInternalServerError, "authentication failed")
 			return
 		}
+
+		h.logger.Debug("MFA challenge created",
+			"user_id", userID,
+		)
 
 		// Return challenge (not full session)
 		httputil.JSON(w, http.StatusOK, map[string]interface{}{
@@ -218,6 +293,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No MFA: proceed with normal session issuance
+	h.logger.Debug("issuing session",
+		"user_id", userID,
+		"mfa_enabled", user.MFAEnabled,
+	)
+
 	opts := auth.IssueSessionOpts{
 		IP:          r.RemoteAddr,
 		UserAgent:   r.UserAgent(),
@@ -225,9 +305,22 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	tokens, err := h.sessionService.IssueSession(r.Context(), userID, opts)
 	if err != nil {
+		h.logger.Error("login failed: could not issue session",
+			"user_id", userID,
+			"client_ip", clientIP,
+			"error", err,
+		)
 		httputil.Error(w, http.StatusInternalServerError, "failed to issue session")
 		return
 	}
+
+	h.logger.Info("login successful",
+		"user_id", userID,
+		"identifier", maskedIdentifier,
+		"client_ip", clientIP,
+		"client_type", clientType,
+		"mfa_verified", false,
+	)
 
 	h.writeTokenResponse(w, r, tokens, http.StatusOK)
 }
