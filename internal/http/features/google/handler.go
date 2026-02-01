@@ -393,6 +393,7 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.sessionService.AccessTokenTTL(),
 		h.sessionService.RefreshTokenTTL(),
 		httputil.CookieConfig{
+			Path:     "/",
 			Secure:   h.cookieSecure,
 			SameSite: http.SameSiteLaxMode,
 		},
