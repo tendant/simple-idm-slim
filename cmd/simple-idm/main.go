@@ -139,6 +139,18 @@ func main() {
 		logger.Info("MFA service enabled")
 	}
 
+	// Decode OAuth state signing key if configured
+	var oauthStateSignKey []byte
+	if cfg.OAuthStateSignKey != "" {
+		var err error
+		oauthStateSignKey, err = hex.DecodeString(cfg.OAuthStateSignKey)
+		if err != nil || len(oauthStateSignKey) != 32 {
+			logger.Error("OAUTH_STATE_SIGN_KEY must be 64-char hex (32 bytes)")
+			os.Exit(1)
+		}
+		logger.Info("OAuth state cookie signing enabled (multi-replica safe)")
+	}
+
 	// Create router
 	router := httpserver.NewRouter(httpserver.RouterConfig{
 		Logger:                    logger,
@@ -157,6 +169,8 @@ func main() {
 		Validation:                cfg.Validation,
 		SessionSecurity:           cfg.SessionSecurity,
 		EmailVerificationRequired: cfg.EmailVerificationRequired,
+		OAuthStateSignKey:         oauthStateSignKey,
+		CookieSecure:              true, // Should be true for production (HTTPS)
 	})
 
 	// Create HTTP server

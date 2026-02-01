@@ -31,6 +31,7 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURI  string
+	OAuthStateSignKey  string // Hex-encoded 32-byte key for signing OAuth state cookies (enables multi-replica)
 
 	// SMTP Email
 	SMTPHost     string
@@ -149,6 +150,7 @@ func Load() (*Config, error) {
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURI:  getEnv("GOOGLE_REDIRECT_URI", ""),
+		OAuthStateSignKey:  getEnv("OAUTH_STATE_SIGN_KEY", ""), // 64-char hex (32 bytes) for multi-replica support
 
 		// SMTP Email (optional)
 		SMTPHost:     getEnv("SMTP_HOST", ""),

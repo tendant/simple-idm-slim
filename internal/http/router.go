@@ -38,6 +38,8 @@ type RouterConfig struct {
 	Validation                config.ValidationConfig
 	SessionSecurity           config.SessionSecurityConfig
 	EmailVerificationRequired bool
+	OAuthStateSignKey         []byte // Key for signing OAuth state cookies (enables multi-replica support)
+	CookieSecure              bool   // Whether to use Secure flag on cookies (should be true for HTTPS)
 }
 
 // NewRouter creates a new HTTP router with all routes registered.
@@ -82,7 +84,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Register Google OAuth routes (if configured)
 	if cfg.GoogleService != nil {
-		googleHandler := google.NewHandler(cfg.GoogleService, cfg.SessionService)
+		var googleHandler *google.Handler
+		if len(cfg.OAuthStateSignKey) > 0 {
+			// Use cookie-based state storage (recommended for multi-replica deployments)
+			googleHandler = google.NewHandlerWithCookieState(cfg.GoogleService, cfg.SessionService, cfg.OAuthStateSignKey, cfg.CookieSecure)
+			cfg.Logger.Info("Google OAuth: using cookie-based state storage (multi-replica safe)")
+		} else {
+			// Fall back to in-memory state storage (single replica only)
+			googleHandler = google.NewHandler(cfg.GoogleService, cfg.SessionService)
+			cfg.Logger.Warn("Google OAuth: using in-memory state storage (not safe for multi-replica)")
+		}
 		r.Get("/v1/auth/google", googleHandler.Start)
 		r.Get("/v1/auth/google/callback", googleHandler.Callback)
 	}

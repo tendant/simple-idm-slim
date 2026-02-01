@@ -114,6 +114,11 @@ type GoogleConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURI  string
+	// StateSignKey is a 32-byte key for signing OAuth state cookies.
+	// Required for multi-replica deployments. Generate with: openssl rand -hex 32
+	StateSignKey []byte
+	// CookieSecure sets the Secure flag on OAuth state cookies (default: true for HTTPS).
+	CookieSecure bool
 }
 
 // IDM is the main identity management instance.
@@ -264,7 +269,12 @@ func (i *IDM) Router() chi.Router {
 
 	// Google OAuth routes (if configured)
 	if i.googleService != nil {
-		googleHandler := google.NewHandler(i.googleService, i.sessionService)
+		var googleHandler *google.Handler
+		if i.config.Google != nil && len(i.config.Google.StateSignKey) > 0 {
+			googleHandler = google.NewHandlerWithCookieState(i.googleService, i.sessionService, i.config.Google.StateSignKey, i.config.Google.CookieSecure)
+		} else {
+			googleHandler = google.NewHandler(i.googleService, i.sessionService)
+		}
 		r.Get("/google/start", googleHandler.Start)
 		r.Get("/google/callback", googleHandler.Callback)
 	}
@@ -318,7 +328,12 @@ func (i *IDM) AuthRouter() chi.Router {
 
 	// Google OAuth routes (if configured)
 	if i.googleService != nil {
-		googleHandler := google.NewHandler(i.googleService, i.sessionService)
+		var googleHandler *google.Handler
+		if i.config.Google != nil && len(i.config.Google.StateSignKey) > 0 {
+			googleHandler = google.NewHandlerWithCookieState(i.googleService, i.sessionService, i.config.Google.StateSignKey, i.config.Google.CookieSecure)
+		} else {
+			googleHandler = google.NewHandler(i.googleService, i.sessionService)
+		}
 		r.Get("/google/start", googleHandler.Start)
 		r.Get("/google/callback", googleHandler.Callback)
 	}
