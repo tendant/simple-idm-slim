@@ -385,15 +385,30 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 		"email", claims.Email,
 	)
 
-	// Return tokens as JSON (or redirect with tokens in fragment/query for SPA)
-	// For SPA, you might want to redirect to oauthState.RedirectURI with tokens
-	httputil.JSON(w, http.StatusOK, CallbackResponse{
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
-		TokenType:    tokens.TokenType,
-		ExpiresIn:    tokens.ExpiresIn,
-		RedirectURI:  oauthState.RedirectURI,
-	})
+	// Set auth cookies for web clients
+	httputil.SetAuthCookies(
+		w,
+		tokens.AccessToken,
+		tokens.RefreshToken,
+		h.sessionService.AccessTokenTTL(),
+		h.sessionService.RefreshTokenTTL(),
+		httputil.CookieConfig{
+			Secure:   h.cookieSecure,
+			SameSite: http.SameSiteLaxMode,
+		},
+	)
+
+	// Redirect to the original redirect URI
+	redirectURI := oauthState.RedirectURI
+	if redirectURI == "" {
+		redirectURI = "/"
+	}
+
+	slog.Debug("Google OAuth: redirecting to app",
+		"redirect_uri", redirectURI,
+	)
+
+	http.Redirect(w, r, redirectURI, http.StatusFound)
 }
 
 // CallbackHTML handles the callback and returns an HTML page that posts tokens to the parent window.
