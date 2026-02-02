@@ -24,12 +24,13 @@ const (
 
 // SessionConfig holds session configuration.
 type SessionConfig struct {
-	AccessTokenTTL       time.Duration
-	RefreshTokenTTL      time.Duration
-	JWTSecret            []byte
-	Issuer               string
-	FingerprintEnabled   bool
-	DetectReuseEnabled   bool
+	AccessTokenTTL     time.Duration
+	RefreshTokenTTL    time.Duration
+	JWTSecret          []byte
+	Issuer             string
+	FingerprintEnabled bool
+	DetectReuseEnabled bool
+	AccessTokenIssuer  AccessTokenIssuer
 }
 
 // SessionService handles session management (the IssueSession function from the design).
@@ -74,6 +75,21 @@ type IssueSessionOpts struct {
 	Request *http.Request
 	// MFAVerified indicates whether MFA was verified for this session
 	MFAVerified bool
+}
+
+// AccessTokenIssueInput provides context for custom access token issuance.
+type AccessTokenIssueInput struct {
+	User        *domain.User
+	SessionID   uuid.UUID
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
+	Issuer      string
+	MFAVerified bool
+}
+
+// AccessTokenIssuer issues access tokens, allowing custom implementations.
+type AccessTokenIssuer interface {
+	IssueAccessToken(ctx context.Context, input AccessTokenIssueInput) (string, error)
 }
 
 // AccessTokenClaims represents the claims in an access token.
@@ -172,26 +188,7 @@ func (s *SessionService) IssueSession(ctx context.Context, userID uuid.UUID, opt
 
 	// Generate access token (JWT)
 	accessTokenExpiry := now.Add(s.config.AccessTokenTTL)
-	name := ""
-	if user.Name != nil {
-		name = *user.Name
-	}
-	claims := AccessTokenClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   userID.String(),
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(accessTokenExpiry),
-			Issuer:    s.config.Issuer,
-			ID:        sessionID.String(),
-		},
-		Email:         user.Email,
-		EmailVerified: user.EmailVerified,
-		Name:          name,
-		MFAVerified:   !user.MFAEnabled || opts.MFAVerified,
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	accessToken, err := token.SignedString(s.config.JWTSecret)
+	accessToken, err := s.issueAccessToken(ctx, user, sessionID, now, accessTokenExpiry, opts)
 	if err != nil {
 		slog.Error("SessionService.IssueSession: failed to sign access token",
 			"session_id", sessionID,
@@ -264,26 +261,7 @@ func (s *SessionService) RefreshSession(ctx context.Context, refreshToken string
 	// Generate new access token
 	now := time.Now()
 	accessTokenExpiry := now.Add(s.config.AccessTokenTTL)
-	name := ""
-	if user.Name != nil {
-		name = *user.Name
-	}
-	claims := AccessTokenClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   session.UserID.String(),
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(accessTokenExpiry),
-			Issuer:    s.config.Issuer,
-			ID:        session.ID.String(),
-		},
-		Email:         user.Email,
-		EmailVerified: user.EmailVerified,
-		Name:          name,
-		MFAVerified:   !user.MFAEnabled || opts.MFAVerified,
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	accessToken, err := token.SignedString(s.config.JWTSecret)
+	accessToken, err := s.issueAccessToken(ctx, user, session.ID, now, accessTokenExpiry, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -358,4 +336,45 @@ func (s *SessionService) GetUserIDFromToken(tokenString string) (uuid.UUID, erro
 	}
 
 	return uuid.Parse(claims.Subject)
+}
+
+func (s *SessionService) issueAccessToken(
+	ctx context.Context,
+	user *domain.User,
+	sessionID uuid.UUID,
+	issuedAt time.Time,
+	expiresAt time.Time,
+	opts IssueSessionOpts,
+) (string, error) {
+	if s.config.AccessTokenIssuer != nil {
+		return s.config.AccessTokenIssuer.IssueAccessToken(ctx, AccessTokenIssueInput{
+			User:        user,
+			SessionID:   sessionID,
+			IssuedAt:    issuedAt,
+			ExpiresAt:   expiresAt,
+			Issuer:      s.config.Issuer,
+			MFAVerified: !user.MFAEnabled || opts.MFAVerified,
+		})
+	}
+
+	name := ""
+	if user.Name != nil {
+		name = *user.Name
+	}
+	claims := AccessTokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   user.ID.String(),
+			IssuedAt:  jwt.NewNumericDate(issuedAt),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			Issuer:    s.config.Issuer,
+			ID:        sessionID.String(),
+		},
+		Email:         user.Email,
+		EmailVerified: user.EmailVerified,
+		Name:          name,
+		MFAVerified:   !user.MFAEnabled || opts.MFAVerified,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(s.config.JWTSecret)
 }
