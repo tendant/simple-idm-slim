@@ -48,13 +48,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/tendant/simple-idm-slim/pkg/auth"
 	"github.com/tendant/simple-idm-slim/internal/http/features/google"
 	"github.com/tendant/simple-idm-slim/internal/http/features/me"
 	"github.com/tendant/simple-idm-slim/internal/http/features/password"
 	"github.com/tendant/simple-idm-slim/internal/http/features/session"
 	"github.com/tendant/simple-idm-slim/internal/http/middleware"
 	"github.com/tendant/simple-idm-slim/internal/httputil"
+	"github.com/tendant/simple-idm-slim/pkg/auth"
 	"github.com/tendant/simple-idm-slim/pkg/repository"
 )
 
@@ -77,6 +77,9 @@ type Config struct {
 
 	// Google enables Google OAuth authentication (optional).
 	Google *GoogleConfig
+
+	// AccessTokenIssuer overrides access token signing (optional).
+	AccessTokenIssuer auth.AccessTokenIssuer
 
 	// Logger is the structured logger (default: slog.Default()).
 	Logger *slog.Logger
@@ -190,6 +193,7 @@ func New(cfg Config) (*IDM, error) {
 		RefreshTokenTTL:    cfg.RefreshTokenTTL,
 		JWTSecret:          []byte(cfg.JWTSecret),
 		Issuer:             cfg.JWTIssuer,
+		AccessTokenIssuer:  cfg.AccessTokenIssuer,
 		FingerprintEnabled: fingerprintEnabled,
 		DetectReuseEnabled: detectReuse,
 	}, sessionsRepo, usersRepo)
