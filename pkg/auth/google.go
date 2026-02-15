@@ -28,9 +28,10 @@ const (
 
 // GoogleConfig holds Google OAuth configuration.
 type GoogleConfig struct {
-	ClientID     string
-	ClientSecret string
-	RedirectURI  string
+	ClientID       string
+	ClientSecret   string
+	RedirectURI    string
+	MobileClientIDs []string
 }
 
 // GoogleClaims represents the claims from a Google ID token.
@@ -155,8 +156,22 @@ func (s *GoogleService) ValidateIDToken(ctx context.Context, idToken, expectedNo
 		return nil, fmt.Errorf("invalid issuer: %s", claims.Issuer)
 	}
 
-	// Validate audience
-	if len(claims.Audience) == 0 || claims.Audience[0] != s.config.ClientID {
+	// Validate audience (accept web client ID or any mobile client ID)
+	validAudience := false
+	if len(claims.Audience) > 0 {
+		aud := claims.Audience[0]
+		if aud == s.config.ClientID {
+			validAudience = true
+		} else {
+			for _, mobileID := range s.config.MobileClientIDs {
+				if mobileID != "" && aud == mobileID {
+					validAudience = true
+					break
+				}
+			}
+		}
+	}
+	if !validAudience {
 		return nil, errors.New("invalid audience")
 	}
 

@@ -117,6 +117,9 @@ type GoogleConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURI  string
+	// MobileClientIDs are additional Google client IDs for native mobile apps (iOS/Android).
+	// ID tokens from mobile SDKs use these as audience instead of the web ClientID.
+	MobileClientIDs []string
 	// StateSignKey is a 32-byte key for signing OAuth state cookies.
 	// Required for multi-replica deployments. Generate with: openssl rand -hex 32
 	StateSignKey []byte
@@ -202,9 +205,10 @@ func New(cfg Config) (*IDM, error) {
 	if cfg.Google != nil {
 		googleService = auth.NewGoogleService(
 			auth.GoogleConfig{
-				ClientID:     cfg.Google.ClientID,
-				ClientSecret: cfg.Google.ClientSecret,
-				RedirectURI:  cfg.Google.RedirectURI,
+				ClientID:        cfg.Google.ClientID,
+				ClientSecret:    cfg.Google.ClientSecret,
+				RedirectURI:     cfg.Google.RedirectURI,
+				MobileClientIDs: cfg.Google.MobileClientIDs,
 			},
 			cfg.DB,
 			usersRepo,
